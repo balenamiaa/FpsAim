@@ -31,10 +31,10 @@ public class ScreenCapturer : IDisposable
     private IDXGIOutput1? _output;
     private ID3D11Texture2D? _stagingTexture;
 
-    public ScreenCapturer(int monitorIndex)
+    public ScreenCapturer(int monitorIndex, int captureWidth = 640, int captureHeight = 640)
     {
         MonitorIndex = monitorIndex;
-        Initialize();
+        Initialize(captureWidth, captureHeight);
     }
 
     public int MonitorIndex { get; }
@@ -54,7 +54,7 @@ public class ScreenCapturer : IDisposable
         _stagingTexture?.Dispose();
     }
 
-    private void Initialize(int captureWidth = 640, int captureHeight = 640)
+    private void Initialize(int captureWidth, int captureHeight)
     {
         Debug.Assert(captureWidth <= 640 && captureHeight <= 640, "Capture dimensions exceed the 640x640 limit.");
 

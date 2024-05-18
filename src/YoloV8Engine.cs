@@ -1,19 +1,19 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 
 namespace FpsAim;
 
 // ReSharper disable once InconsistentNaming
-public sealed class YoloNASEngine : InferenceEngine
+public sealed class YoloV8Engine : InferenceEngine
 {
     private readonly DenseTensor<byte> _inputTensor;
 
-    public YoloNASEngine(string modelPath, SessionOptions sessionOptions) : base(modelPath, sessionOptions)
+    public YoloV8Engine(string modelPath, SessionOptions sessionOptions) : base(modelPath, sessionOptions)
     {
         var inputMeta = Session.InputMetadata;
         Debug.Assert(inputMeta.Count == 1);
-        Debug.Assert(inputMeta.First().Key == "input");
+        Debug.Assert(inputMeta.First().Key == "images");
         Debug.Assert(inputMeta.First().Value.Dimensions.Take(4).SequenceEqual([1, 3, ImageWidth, ImageHeight]));
         _inputTensor = new DenseTensor<byte>([1, 3, ImageWidth, ImageHeight]);
     }
@@ -28,7 +28,7 @@ public sealed class YoloNASEngine : InferenceEngine
 
         var inputs = new List<NamedOnnxValue>
         {
-            NamedOnnxValue.CreateFromTensor("input", _inputTensor)
+            NamedOnnxValue.CreateFromTensor("images", _inputTensor)
         };
 
         using var outputs = Session.Run(inputs);
@@ -38,33 +38,23 @@ public sealed class YoloNASEngine : InferenceEngine
 
     private void ParseOutput(IDisposableReadOnlyCollection<DisposableNamedOnnxValue> output)
     {
-        // Extract the number of predictions
-        var numPredictions = (int)output.First(o => o.Name == "graph2_num_predictions")
-            .AsTensor<long>().GetValue(0);
+        var boxes = output.First(o => o.Name == "output0").AsTensor<float>();
 
-        // Extract bounding boxes
-        var predBoxes = output.First(o => o.Name == "graph2_pred_boxes")
-            .AsTensor<float>();
-
-        // Extract scores
-        var predScores = output.First(o => o.Name == "graph2_pred_scores")
-            .AsTensor<float>();
-
-        // Extract class IDs
-        var predClasses = output.First(o => o.Name == "graph2_pred_classes")
-            .AsTensor<long>();
+        var numPredictions = boxes.Dimensions[1];
 
         for (var i = 0; i < numPredictions; i++)
         {
-            var xMin = predBoxes[0, i, 0];
-            var yMin = predBoxes[0, i, 1];
-            var xMax = predBoxes[0, i, 2];
-            var yMax = predBoxes[0, i, 3];
+            var classId = boxes[0, i, 5];
+            var confidence = boxes[0, i, 4];
+            var xMin = boxes[0, i, 0];
+            var yMin = boxes[0, i, 1];
+            var xMax = boxes[0, i, 2];
+            var yMax = boxes[0, i, 3];
 
             DetectionsBuffer[i] = new DetectionResult
             {
-                ClassId = predClasses[0, i],
-                Confidence = predScores[0, i],
+                ClassId = (long)classId,
+                Confidence = confidence,
                 XMin = xMin,
                 YMin = yMin,
                 XMax = xMax,

@@ -16,10 +16,12 @@ public enum Executer
     TensorRT
 }
 
-public record struct AimAssistConfig(
+public readonly record struct AimAssistConfig(
     Executer Executer,
     AimAssistTarget Target,
-    float ConfidenceThreshold)
+    float ConfidenceThreshold,
+    int CaptureWidth,
+    int CaptureHeight)
 {
     public SessionOptions GetSessionOptions()
     {
@@ -42,11 +44,10 @@ public record struct AimAssistConfig(
 
 public static class AimAssistModule
 {
-    public static void Run(ITargetPredictor predictor, ISmoothingFunction smoothingFunction,
+    public static void Run(InferenceEngine engine, ITargetPredictor predictor, ISmoothingFunction smoothingFunction,
         Func<bool> activationCriteria, AimAssistConfig config)
     {
-        using var screenCapturer = new ScreenCapturer(0);
-        using var engine = new YoloNASEngine("model.onnx", config.GetSessionOptions());
+        using var screenCapturer = new ScreenCapturer(0, config.CaptureWidth, config.CaptureHeight);
         using var mouseMover = new MouseMover();
 
         var classToTarget = config.Target switch
@@ -59,7 +60,7 @@ public static class AimAssistModule
         var screenWidth = screenCapturer.ScreenWidth;
         var screenHeight = screenCapturer.ScreenHeight;
 
-        Warmup(screenCapturer, engine);
+        Warmup(screenCapturer, engine, config.CaptureWidth, config.CaptureHeight);
 
         Console.WriteLine("Aim assist is running. Press Ctrl+C to exit.");
 
@@ -71,7 +72,7 @@ public static class AimAssistModule
             var frame = screenCapturer.CaptureFrame();
             if (frame.Length == 0) continue;
 
-            engine.InferScreenCapture(frame, 640, 640);
+            engine.Infer(frame, config.CaptureWidth, config.CaptureHeight);
 
             var detections = engine.GetBestDetections().ToList();
             detections = NonMaximumSuppression.Run(detections, 0.5f);
@@ -91,7 +92,7 @@ public static class AimAssistModule
                         stopwatch.Elapsed.TotalSeconds); // We predict regardless to build the model.
                 if (activationCriteria())
                 {
-                    var (x, y) = YoloNASEngine.ScreenCoords(
+                    var (x, y) = InferenceEngine.ScreenCoords(
                         predictedX,
                         predictedY,
                         screenWidth,
@@ -129,7 +130,7 @@ public static class AimAssistModule
             var x = (int)(detection.XMin + detection.XMax) / 2;
             var y = (int)(detection.YMin + detection.YMax) / 2;
 
-            var (xScreenCords, yScreenCords) = YoloNASEngine.ScreenCoords(
+            var (xScreenCords, yScreenCords) = InferenceEngine.ScreenCoords(
                 x,
                 y,
                 screenWidth,
@@ -151,13 +152,14 @@ public static class AimAssistModule
     }
 
 
-    private static void Warmup(ScreenCapturer screenCapturer, YoloNASEngine engine)
+    private static void Warmup(ScreenCapturer screenCapturer, InferenceEngine engine, int captureWidth,
+        int captureHeight, int warmupFrames = 10)
     {
-        for (var i = 0; i < 10; i++)
+        for (var i = 0; i < warmupFrames; i++)
         {
             var frame = screenCapturer.CaptureFrame();
             if (frame.Length == 0) continue;
-            engine.InferScreenCapture(frame, 640, 640);
+            engine.Infer(frame, captureWidth, captureHeight);
         }
     }
 }

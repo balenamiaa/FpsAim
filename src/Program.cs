@@ -1,5 +1,6 @@
 ﻿using System.Diagnostics;
-using FpsAim;
+
+namespace FpsAim;
 
 public static class Program
 {
@@ -25,11 +26,14 @@ public static class Program
         {
             ConfidenceThreshold = 0.5f,
             Target = AimAssistTarget.Head,
-            Executer = Executer.TensorRT
+            Executer = Executer.TensorRT,
+            CaptureWidth = 448,
+            CaptureHeight = 448
         };
         var predictor = new KalmanFilterPredictor();
         var smoothingFunction = new LogarithmicSmoothing(0.6f);
-        AimAssistModule.Run(predictor, smoothingFunction, () => !MouseMover.IsMouse5Down(), config);
+        using var engine = new YoloV8Engine("model.onnx", config.GetSessionOptions());
+        AimAssistModule.Run(engine, predictor, smoothingFunction, () => !MouseMover.IsMouse5Down(), config);
     }
 
     public static void Main(string[] args)
