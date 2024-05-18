@@ -1,4 +1,5 @@
-﻿using System.Runtime.Intrinsics;
+﻿using System.Diagnostics;
+using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
@@ -6,16 +7,27 @@ using Win32;
 
 namespace FpsAim;
 
-public class InferenceEngine(string modelPath, SessionOptions sessionOptions) : IDisposable
+public class InferenceEngine : IDisposable
 {
-    private const int MaxDetections = 100;
-    protected const int ImageWidth = 448;
-    protected const int ImageHeight = 448;
+    private const int MaxDetections = 10_000;
+
 
     protected readonly DetectionResult[] DetectionsBuffer = new DetectionResult[MaxDetections];
-    protected readonly InferenceSession Session = new(modelPath, sessionOptions);
+    protected readonly int InputHeight;
+    protected readonly int InputWidth;
+    protected readonly InferenceSession Session;
 
-    protected virtual string[] Classes => [];
+    public InferenceEngine(string modelPath, SessionOptions sessionOptions)
+    {
+        Session = new InferenceSession(modelPath, sessionOptions);
+        var inputMeta = Session.InputMetadata;
+        Debug.Assert(inputMeta.Count == 1);
+
+        var firstInput = inputMeta.First();
+        InputWidth = firstInput.Value.Dimensions[3];
+        InputHeight = firstInput.Value.Dimensions[2];
+    }
+
 
     void IDisposable.Dispose()
     {
@@ -70,33 +82,61 @@ public class InferenceEngine(string modelPath, SessionOptions sessionOptions) : 
         });
     }
 
-    public virtual void Infer(ReadOnlySpan<byte> input, int width, int height)
+    protected static unsafe void ProcessImageFromBGRAInto_F32RGB(ReadOnlySpan<byte> input,
+        DenseTensor<float> inputTensor,
+        int width,
+        int height)
     {
-        if (width != ImageWidth || height != ImageHeight) throw new ArgumentException("Invalid input dimensions.");
+        var pInput = input.GetPointer();
+        if (pInput == null) throw new ArgumentNullException(nameof(pInput));
+
+        Parallel.For(0, height, y =>
+        {
+            var inputRowStart = pInput + y * width * 4;
+            var x = 0;
+
+            for (; x < width; x++)
+            {
+                var inputPixelIndex = x * 4;
+                var r = inputRowStart[inputPixelIndex + 2];
+                var g = inputRowStart[inputPixelIndex + 1];
+                var b = inputRowStart[inputPixelIndex];
+
+                inputTensor[0, 0, y, x] = r / 255.0f;
+                inputTensor[0, 1, y, x] = g / 255.0f;
+                inputTensor[0, 2, y, x] = b / 255.0f;
+            }
+        });
+    }
+
+    public virtual void Infer(ReadOnlySpan<byte> input, int width, int height, float confidenceThreshold)
+    {
+        Debug.Assert(width == InputWidth && height == InputHeight,
+            "Input dimensions do not match the model input dimensions.");
         Array.Clear(DetectionsBuffer, 0, MaxDetections);
     }
 
     public IEnumerable<DetectionResult> GetBestDetections()
     {
-        var bestScores = new float[Classes.Length];
-        var bestResults = new DetectionResult?[Classes.Length];
+        var bestScores = new Dictionary<int, float>();
+        var bestResults = new Dictionary<int, DetectionResult>();
 
-        foreach (var detection in DetectionsBuffer.Where(d => d.Confidence > 0))
+        foreach (var detection in DetectionsBuffer)
         {
             var classId = (int)detection.ClassId;
-            if (!(detection.Confidence > bestScores[classId])) continue;
+            if (!(detection.Confidence > bestScores.GetValueOrDefault(classId, 0))) continue;
 
             bestScores[classId] = detection.Confidence;
             bestResults[classId] = detection;
         }
 
-        return bestResults.Where(r => r != null).Select(result => result!.Value);
+        return bestResults.Values;
     }
 
-    public static (float, float) ScreenCoords(float x, float y, int screenWidth, int screenHeight)
+    public (float, float) ScreenCoords(float x, float y, int screenWidth, int screenHeight)
     {
-        var scxr = screenWidth / (float)ImageWidth;
-        var scyr = screenHeight / (float)ImageHeight;
+        var scxr = screenWidth / (float)InputWidth;
+        var scyr = screenHeight / (float)InputHeight;
         return (x * scxr, y * scyr);
     }
 }

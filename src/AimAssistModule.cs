@@ -66,20 +66,26 @@ public static class AimAssistModule
 
         var frames = 0;
         var totalTimeMs = 0L;
+        var screenCaptureTimeMs = 0L;
+        var inferenceTimeMs = 0L;
         var stopwatch = Stopwatch.StartNew();
         while (true)
         {
+            var stopwatchScreen = Stopwatch.StartNew();
             var frame = screenCapturer.CaptureFrame();
+            screenCaptureTimeMs += stopwatchScreen.ElapsedMilliseconds;
+
             if (frame.Length == 0) continue;
 
-            engine.Infer(frame, config.CaptureWidth, config.CaptureHeight);
+            var stopwatchInference = Stopwatch.StartNew();
+            engine.Infer(frame, config.CaptureWidth, config.CaptureHeight, config.ConfidenceThreshold);
+            inferenceTimeMs += stopwatchInference.ElapsedMilliseconds;
 
             var detections = engine.GetBestDetections().ToList();
             detections = NonMaximumSuppression.Run(detections, 0.5f);
 
             var detectionResult = GetClosestToCenter(
-                detections.Where(d =>
-                    d.ClassId == classToTarget && d.Confidence >= config.ConfidenceThreshold),
+                detections.Where(d => d.ClassId == classToTarget),
                 screenWidth,
                 screenHeight);
 
@@ -92,7 +98,7 @@ public static class AimAssistModule
                         stopwatch.Elapsed.TotalSeconds); // We predict regardless to build the model.
                 if (activationCriteria())
                 {
-                    var (x, y) = InferenceEngine.ScreenCoords(
+                    var (x, y) = engine.ScreenCoords(
                         predictedX,
                         predictedY,
                         screenWidth,
@@ -112,7 +118,12 @@ public static class AimAssistModule
             totalTimeMs += elapsedMs;
             frames++;
 
-            if (frames % 100 == 0) Console.WriteLine($"Average time: {totalTimeMs / (float)frames} ms");
+            if (frames % 100 == 0)
+            {
+                Console.WriteLine($"Total time: {totalTimeMs / (float)frames} ms");
+                Console.WriteLine($"Screen capture time: {screenCaptureTimeMs / (float)frames} ms");
+                Console.WriteLine($"Inference time: {inferenceTimeMs / (float)frames} ms");
+            }
 
             stopwatch.Restart();
         }
@@ -124,24 +135,22 @@ public static class AimAssistModule
         DetectionResult? best = null;
         var centerX = screenWidth / 2;
         var centerY = screenHeight / 2;
+        var bestDistance = float.MaxValue;
 
         foreach (var detection in detections)
         {
             var x = (int)(detection.XMin + detection.XMax) / 2;
             var y = (int)(detection.YMin + detection.YMax) / 2;
 
-            var (xScreenCords, yScreenCords) = InferenceEngine.ScreenCoords(
-                x,
-                y,
-                screenWidth,
-                screenHeight);
-
-            var dx = xScreenCords - centerX;
-            var dy = yScreenCords - centerY;
+            var dx = x - centerX;
+            var dy = y - centerY;
 
             switch (best)
             {
-                case { } bestNotNull when dx * dx + dy * dy < (bestNotNull.XMin + bestNotNull.XMax) / 2:
+                case not null when dx * dx + dy * dy < bestDistance:
+                    best = detection;
+                    bestDistance = dx * dx + dy * dy;
+                    break;
                 case null:
                     best = detection;
                     break;
@@ -159,7 +168,7 @@ public static class AimAssistModule
         {
             var frame = screenCapturer.CaptureFrame();
             if (frame.Length == 0) continue;
-            engine.Infer(frame, captureWidth, captureHeight);
+            engine.Infer(frame, captureWidth, captureHeight, 0.1f);
         }
     }
 }

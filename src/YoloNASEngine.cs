@@ -14,16 +14,13 @@ public sealed class YoloNASEngine : InferenceEngine
         var inputMeta = Session.InputMetadata;
         Debug.Assert(inputMeta.Count == 1);
         Debug.Assert(inputMeta.First().Key == "input");
-        Debug.Assert(inputMeta.First().Value.Dimensions.Take(4).SequenceEqual([1, 3, ImageWidth, ImageHeight]));
-        _inputTensor = new DenseTensor<byte>([1, 3, ImageWidth, ImageHeight]);
+        _inputTensor = new DenseTensor<byte>([1, 3, InputWidth, InputHeight]);
     }
 
-    protected override string[] Classes => ["enemy_head", "enemy_torso"];
 
-
-    public override void Infer(ReadOnlySpan<byte> input, int width, int height)
+    public override void Infer(ReadOnlySpan<byte> input, int width, int height, float confidenceThreshold)
     {
-        base.Infer(input, width, height);
+        base.Infer(input, width, height, confidenceThreshold);
         ProcessImageFromBGRAInto_U8RGB(input, _inputTensor, width, height);
 
         var inputs = new List<NamedOnnxValue>
@@ -32,11 +29,11 @@ public sealed class YoloNASEngine : InferenceEngine
         };
 
         using var outputs = Session.Run(inputs);
-        ParseOutput(outputs);
+        ParseOutput(outputs, confidenceThreshold);
     }
 
 
-    private void ParseOutput(IDisposableReadOnlyCollection<DisposableNamedOnnxValue> output)
+    private void ParseOutput(IDisposableReadOnlyCollection<DisposableNamedOnnxValue> output, float confidenceThreshold)
     {
         // Extract the number of predictions
         var numPredictions = (int)output.First(o => o.Name == "graph2_num_predictions")
@@ -56,6 +53,9 @@ public sealed class YoloNASEngine : InferenceEngine
 
         for (var i = 0; i < numPredictions; i++)
         {
+            var confidence = predScores[0, i];
+            if (confidence < confidenceThreshold) continue;
+
             var xMin = predBoxes[0, i, 0];
             var yMin = predBoxes[0, i, 1];
             var xMax = predBoxes[0, i, 2];
@@ -64,7 +64,7 @@ public sealed class YoloNASEngine : InferenceEngine
             DetectionsBuffer[i] = new DetectionResult
             {
                 ClassId = predClasses[0, i],
-                Confidence = predScores[0, i],
+                Confidence = confidence,
                 XMin = xMin,
                 YMin = yMin,
                 XMax = xMax,

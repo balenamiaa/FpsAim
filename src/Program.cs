@@ -24,7 +24,7 @@ public static class Program
     {
         var config = new AimAssistConfig
         {
-            ConfidenceThreshold = 0.5f,
+            ConfidenceThreshold = 0.3f,
             Target = AimAssistTarget.Head,
             Executer = Executer.TensorRT,
             CaptureWidth = 448,
