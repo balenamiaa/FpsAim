@@ -24,14 +24,14 @@ public static class Program
     {
         var config = new AimAssistConfig
         {
-            ConfidenceThreshold = 0.3f,
+            ConfidenceThreshold = 0.5f,
             Target = AimAssistTarget.Head,
             Executer = Executer.TensorRT,
             CaptureWidth = 448,
             CaptureHeight = 448
         };
         var predictor = new KalmanFilterPredictor();
-        var smoothingFunction = new LogarithmicSmoothing(0.6f);
+        var smoothingFunction = new SigmoidSmoothing(2f, 1.6f, 3.0f, 160.0f);
         using var engine = new YoloV8Engine("v8-n.onnx", config.GetSessionOptions());
         AimAssistModule.Run(engine, predictor, smoothingFunction, () => !MouseMover.IsMouse5Down(), config);
     }

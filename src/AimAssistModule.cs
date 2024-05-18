@@ -66,20 +66,13 @@ public static class AimAssistModule
 
         var frames = 0;
         var totalTimeMs = 0L;
-        var screenCaptureTimeMs = 0L;
-        var inferenceTimeMs = 0L;
         var stopwatch = Stopwatch.StartNew();
         while (true)
         {
-            var stopwatchScreen = Stopwatch.StartNew();
             var frame = screenCapturer.CaptureFrame();
-            screenCaptureTimeMs += stopwatchScreen.ElapsedMilliseconds;
-
             if (frame.Length == 0) continue;
 
-            var stopwatchInference = Stopwatch.StartNew();
             engine.Infer(frame, config.CaptureWidth, config.CaptureHeight, config.ConfidenceThreshold);
-            inferenceTimeMs += stopwatchInference.ElapsedMilliseconds;
 
             var detections = engine.GetBestDetections().ToList();
             detections = NonMaximumSuppression.Run(detections, 0.5f);
@@ -96,6 +89,7 @@ public static class AimAssistModule
                 var (predictedX, predictedY) =
                     predictor.Predict(targetX, targetY,
                         stopwatch.Elapsed.TotalSeconds); // We predict regardless to build the model.
+
                 if (activationCriteria())
                 {
                     var (x, y) = engine.ScreenCoords(
@@ -121,8 +115,6 @@ public static class AimAssistModule
             if (frames % 100 == 0)
             {
                 Console.WriteLine($"Total time: {totalTimeMs / (float)frames} ms");
-                Console.WriteLine($"Screen capture time: {screenCaptureTimeMs / (float)frames} ms");
-                Console.WriteLine($"Inference time: {inferenceTimeMs / (float)frames} ms");
             }
 
             stopwatch.Restart();
