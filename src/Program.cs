@@ -32,7 +32,7 @@ public static class Program
         };
         var predictor = new KalmanFilterPredictor();
         var smoothingFunction = new LogarithmicSmoothing(0.6f);
-        using var engine = new YoloV8Engine("model.onnx", config.GetSessionOptions());
+        using var engine = new YoloV8Engine("v8-n.onnx", config.GetSessionOptions());
         AimAssistModule.Run(engine, predictor, smoothingFunction, () => !MouseMover.IsMouse5Down(), config);
     }
 
