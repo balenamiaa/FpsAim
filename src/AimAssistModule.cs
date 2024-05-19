@@ -16,17 +16,23 @@ public enum Executer
     TensorRT
 }
 
-public readonly record struct AimAssistConfig(
-    Executer Executer,
-    AimAssistTarget Target,
-    float ConfidenceThreshold,
-    int CaptureWidth,
-    int CaptureHeight)
+public readonly record struct AimAssistConfiguration
 {
-    public SessionOptions GetSessionOptions()
+    public required InferenceEngine Engine { get; init; }
+    public required ITargetPredictor TargetPredictor { get; init; }
+    public required ISmoothingFunction SmoothingFunction { get; init; }
+    public required IAimAssistCondition ActivationCondition { get; init; }
+    public required AimAssistTarget Target { get; init; }
+    public required float ConfidenceThreshold { get; init; }
+    public required int CaptureWidth { get; init; }
+    public required int CaptureHeight { get; init; }
+    public required float XCorrectionMultiplier { get; init; }
+    public required float YCorrectionMultiplier { get; init; }
+
+    public static SessionOptions GetSessionOptions(Executer executer)
     {
         var options = new SessionOptions { GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL };
-        return Executer switch
+        return executer switch
         {
             Executer.Cpu => options,
             Executer.Cuda => Apply(o => o.AppendExecutionProvider_CUDA()),
@@ -42,15 +48,14 @@ public readonly record struct AimAssistConfig(
     }
 }
 
-public static class AimAssistModule
+public class AimAssistModule(AimAssistConfiguration configuration)
 {
-    public static void Run(InferenceEngine engine, ITargetPredictor predictor, ISmoothingFunction smoothingFunction,
-        Func<bool> activationCriteria, AimAssistConfig config)
+    public void Run()
     {
-        using var screenCapturer = new ScreenCapturer(0, config.CaptureWidth, config.CaptureHeight);
+        using var screenCapturer = new ScreenCapturer(0, configuration.CaptureWidth, configuration.CaptureHeight);
         using var mouseMover = new MouseMover();
 
-        var classToTarget = config.Target switch
+        var classToTarget = configuration.Target switch
         {
             AimAssistTarget.Head => 0,
             AimAssistTarget.Torso => 1,
@@ -62,7 +67,7 @@ public static class AimAssistModule
         var screenCenterX = screenWidth / 2;
         var screenCenterY = screenHeight / 2;
 
-        Warmup(screenCapturer, engine, config.CaptureWidth, config.CaptureHeight);
+        Warmup(screenCapturer);
 
         Console.WriteLine("Aim assist is running. Press Ctrl+C to exit.");
 
@@ -71,13 +76,14 @@ public static class AimAssistModule
         var stopwatch = Stopwatch.StartNew();
         while (true)
         {
+            configuration.ActivationCondition.Update();
             var frame = screenCapturer.CaptureFrame();
             if (frame.Length == 0) continue;
 
-            engine.Infer(frame, config.CaptureWidth, config.CaptureHeight, config.ConfidenceThreshold);
+            configuration.Engine.Infer(frame, configuration.CaptureWidth, configuration.CaptureHeight,
+                configuration.ConfidenceThreshold);
 
-            var detections = engine.GetBestDetections().ToList();
-            detections = NonMaximumSuppression.Run(detections, 0.5f);
+            var detections = NonMaximumSuppression.Applied(configuration.Engine.GetBestDetections(), 0.5f);
 
             var detectionResult = GetClosestToCenter(detections.Where(d => d.ClassId == classToTarget));
 
@@ -86,22 +92,19 @@ public static class AimAssistModule
                 var targetX = (detection.XMin + detection.XMax) / 2.0f;
                 var targetY = (detection.YMin + detection.YMax) / 2.0f;
                 var (predictedX, predictedY) =
-                    predictor.Predict(targetX, targetY,
+                    configuration.TargetPredictor.Predict(targetX, targetY,
                         stopwatch.Elapsed.TotalSeconds); // We predict regardless to build the model.
 
-                if (activationCriteria())
+                if (configuration.ActivationCondition.ShouldAimAssist())
                 {
-                    var (x, y) = engine.ScreenCoords(
-                        predictedX,
-                        predictedY,
-                        screenWidth,
-                        screenHeight);
+                    var (x, y) =
+                        detection.OffsetAbsoluteFromCenter(predictedX, predictedY, screenCenterX, screenCenterY);
                     var distance = detection.GetDistanceUnits(x, y, screenCenterX, screenCenterY);
 
-                    var dx = x - screenCenterX;
-                    var dy = y - screenCenterY;
+                    var dx = configuration.XCorrectionMultiplier * (x - screenCenterX);
+                    var dy = configuration.YCorrectionMultiplier * (y - screenCenterY);
 
-                    var smoothingFactor = smoothingFunction.Calculate(distance);
+                    var smoothingFactor = configuration.SmoothingFunction.Calculate(distance);
                     var dxSmoothed = (int)Math.Ceiling(dx * smoothingFactor);
                     var dySmoothed = (int)Math.Ceiling(dy * smoothingFactor);
                     mouseMover.MoveRelative(dxSmoothed, dySmoothed);
@@ -117,6 +120,7 @@ public static class AimAssistModule
             stopwatch.Restart();
         }
     }
+
 
     private static DetectionResult? GetClosestToCenter(
         IEnumerable<DetectionResult> detections)
@@ -149,14 +153,13 @@ public static class AimAssistModule
     }
 
 
-    private static void Warmup(ScreenCapturer screenCapturer, InferenceEngine engine, int captureWidth,
-        int captureHeight, int warmupFrames = 10)
+    private void Warmup(ScreenCapturer screenCapturer, int warmupFrames = 10)
     {
         for (var i = 0; i < warmupFrames; i++)
         {
             var frame = screenCapturer.CaptureFrame();
             if (frame.Length == 0) continue;
-            engine.Infer(frame, captureWidth, captureHeight, 0.1f);
+            configuration.Engine.Infer(frame, configuration.CaptureWidth, configuration.CaptureHeight, 0.1f);
         }
     }
 }

@@ -1,26 +1,25 @@
-﻿namespace FpsAim;
+﻿using System.Collections.Immutable;
+
+namespace FpsAim;
 
 public static class NonMaximumSuppression
 {
-    public static List<DetectionResult> Run(List<DetectionResult> detections, float iouThreshold)
+    public static IEnumerable<DetectionResult> Applied(IEnumerable<DetectionResult> detections, float iouThreshold)
     {
-        detections = detections.OrderByDescending(d => d.Confidence).ToList();
+        var detectionsArray = detections.ToImmutableArray();
+        var isSuppressed = new bool[detectionsArray.Length];
 
-        var selectedDetections = new List<DetectionResult>();
-        var isSuppressed = new bool[detections.Count];
-
-        for (var i = 0; i < detections.Count; i++)
+        for (var i = 0; i < detectionsArray.Length; i++)
         {
             if (isSuppressed[i]) continue;
 
-            selectedDetections.Add(detections[i]);
-
-            for (var j = i + 1; j < detections.Count; j++)
-                if (Iou(detections[i], detections[j]) > iouThreshold)
+            for (var j = i + 1; j < detectionsArray.Length; j++)
+                if (Iou(detectionsArray[i], detectionsArray[j]) > iouThreshold)
                     isSuppressed[j] = true;
         }
 
-        return selectedDetections;
+
+        return detectionsArray.Where((_, i) => !isSuppressed[i]);
     }
 
     private static float Iou(DetectionResult box1, DetectionResult box2)

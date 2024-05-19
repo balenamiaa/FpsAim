@@ -27,6 +27,9 @@
 
     <ItemGroup>
         <None Remove="interception\**"/>
+        <None Update="v8-n.onnx">
+          <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </None>
     </ItemGroup>
 
 </Project>

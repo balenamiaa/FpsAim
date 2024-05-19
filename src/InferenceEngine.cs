@@ -10,7 +10,7 @@ namespace FpsAim;
 
 public class InferenceEngine : IDisposable
 {
-    private const int MaxDetections = 10_000;
+    public const int MaxDetections = 10_000;
 
 
     protected readonly DetectionResult[] DetectionsBuffer = new DetectionResult[MaxDetections];
@@ -18,7 +18,7 @@ public class InferenceEngine : IDisposable
     protected readonly int InputWidth;
     protected readonly InferenceSession Session;
 
-    public InferenceEngine(string modelPath, SessionOptions sessionOptions)
+    protected InferenceEngine(string modelPath, SessionOptions sessionOptions)
     {
         Session = new InferenceSession(modelPath, sessionOptions);
         var inputMeta = Session.InputMetadata;
@@ -133,13 +133,6 @@ public class InferenceEngine : IDisposable
 
         return bestResults.Values;
     }
-
-    public (float, float) ScreenCoords(float x, float y, int screenWidth, int screenHeight)
-    {
-        var scxr = screenWidth / (float)InputWidth;
-        var scyr = screenHeight / (float)InputHeight;
-        return (x * scxr, y * scyr);
-    }
 }
 
 public readonly record struct DetectionResult
@@ -164,5 +157,21 @@ public readonly record struct DetectionResult
         var dyNorm = dy / height;
 
         return MathF.Sqrt(dxNorm * dxNorm + dyNorm * dyNorm);
+    }
+
+    public (float, float) OffsetRelativeFromCenter(float xNorm, float yNorm, float centerX, float centerY)
+    {
+        var top = centerY - Height / 2;
+        var left = centerX - Width / 2;
+
+        return (left + xNorm * Width, top + yNorm * Height);
+    }
+
+    public (float, float) OffsetAbsoluteFromCenter(float x, float y, float centerX, float centerY)
+    {
+        var top = centerY - Height / 2;
+        var left = centerX - Width / 2;
+
+        return (left + x, top + y);
     }
 }
