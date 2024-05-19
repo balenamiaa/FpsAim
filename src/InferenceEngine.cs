@@ -1,4 +1,5 @@
 ﻿using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
 using Microsoft.ML.OnnxRuntime;
@@ -141,4 +142,27 @@ public class InferenceEngine : IDisposable
     }
 }
 
-public record struct DetectionResult(long ClassId, float Confidence, float XMin, float YMin, float XMax, float YMax);
+public readonly record struct DetectionResult
+{
+    public required long ClassId { get; init; }
+    public required float Confidence { get; init; }
+    public required float XMin { get; init; }
+    public required float YMin { get; init; }
+    public required float XMax { get; init; }
+    public required float YMax { get; init; }
+    public required float Width { get; init; }
+    public required float Height { get; init; }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+    public float GetDistanceUnits(float x1, float y1, float x2, float y2)
+    {
+        var width = XMax - XMin;
+        var height = YMax - YMin;
+        var dx = x2 - x1;
+        var dy = y2 - y1;
+        var dxNorm = dx / width;
+        var dyNorm = dy / height;
+
+        return MathF.Sqrt(dxNorm * dxNorm + dyNorm * dyNorm);
+    }
+}

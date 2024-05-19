@@ -30,8 +30,8 @@ public static class Program
             CaptureWidth = 448,
             CaptureHeight = 448
         };
-        var predictor = new KalmanFilterPredictor();
-        var smoothingFunction = new SigmoidSmoothing(2f, 1.6f, 3.0f, 160.0f);
+        var predictor = new NullPredictor();
+        var smoothingFunction = new SigmoidSmoothing(1f, 2.4f, 1.6f, 2f);
         using var engine = new YoloV8Engine("v8-n.onnx", config.GetSessionOptions());
         AimAssistModule.Run(engine, predictor, smoothingFunction, () => !MouseMover.IsMouse5Down(), config);
     }

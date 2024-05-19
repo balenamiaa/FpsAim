@@ -59,6 +59,8 @@ public static class AimAssistModule
 
         var screenWidth = screenCapturer.ScreenWidth;
         var screenHeight = screenCapturer.ScreenHeight;
+        var screenCenterX = screenWidth / 2;
+        var screenCenterY = screenHeight / 2;
 
         Warmup(screenCapturer, engine, config.CaptureWidth, config.CaptureHeight);
 
@@ -77,10 +79,7 @@ public static class AimAssistModule
             var detections = engine.GetBestDetections().ToList();
             detections = NonMaximumSuppression.Run(detections, 0.5f);
 
-            var detectionResult = GetClosestToCenter(
-                detections.Where(d => d.ClassId == classToTarget),
-                screenWidth,
-                screenHeight);
+            var detectionResult = GetClosestToCenter(detections.Where(d => d.ClassId == classToTarget));
 
             if (detectionResult is { } detection)
             {
@@ -97,11 +96,12 @@ public static class AimAssistModule
                         predictedY,
                         screenWidth,
                         screenHeight);
+                    var distance = detection.GetDistanceUnits(x, y, screenCenterX, screenCenterY);
 
-                    var dx = x - screenWidth / 2.0f;
-                    var dy = y - screenHeight / 2.0f;
+                    var dx = x - screenCenterX;
+                    var dy = y - screenCenterY;
 
-                    var smoothingFactor = smoothingFunction.Calculate(dx, dy);
+                    var smoothingFactor = smoothingFunction.Calculate(distance);
                     var dxSmoothed = (int)Math.Ceiling(dx * smoothingFactor);
                     var dySmoothed = (int)Math.Ceiling(dy * smoothingFactor);
                     mouseMover.MoveRelative(dxSmoothed, dySmoothed);
@@ -112,36 +112,32 @@ public static class AimAssistModule
             totalTimeMs += elapsedMs;
             frames++;
 
-            if (frames % 100 == 0)
-            {
-                Console.WriteLine($"Total time: {totalTimeMs / (float)frames} ms");
-            }
+            if (frames % 100 == 0) Console.WriteLine($"Total time: {totalTimeMs / (float)frames} ms");
 
             stopwatch.Restart();
         }
     }
 
     private static DetectionResult? GetClosestToCenter(
-        IEnumerable<DetectionResult> detections, int screenWidth, int screenHeight)
+        IEnumerable<DetectionResult> detections)
     {
         DetectionResult? best = null;
-        var centerX = screenWidth / 2;
-        var centerY = screenHeight / 2;
         var bestDistance = float.MaxValue;
 
         foreach (var detection in detections)
         {
-            var x = (int)(detection.XMin + detection.XMax) / 2;
-            var y = (int)(detection.YMin + detection.YMax) / 2;
-
-            var dx = x - centerX;
-            var dy = y - centerY;
+            var centerX = (detection.XMin + detection.XMax) / 2.0f;
+            var centerY = (detection.YMin + detection.YMax) / 2.0f;
+            var distance = detection.GetDistanceUnits(centerX, centerY,
+                detection.Width / 2,
+                detection.Height / 2
+            );
 
             switch (best)
             {
-                case not null when dx * dx + dy * dy < bestDistance:
+                case not null when distance < bestDistance:
                     best = detection;
-                    bestDistance = dx * dx + dy * dy;
+                    bestDistance = distance;
                     break;
                 case null:
                     best = detection;

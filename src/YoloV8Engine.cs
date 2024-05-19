@@ -60,7 +60,9 @@ public sealed class YoloV8Engine : InferenceEngine
                     XMin = xCenter - width / 2,
                     YMin = yCenter - height / 2,
                     XMax = xCenter + width / 2,
-                    YMax = yCenter + height / 2
+                    YMax = yCenter + height / 2,
+                    Width = InputWidth,
+                    Height = InputHeight
                 };
             }
         });

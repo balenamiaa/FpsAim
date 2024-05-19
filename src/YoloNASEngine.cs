@@ -68,7 +68,9 @@ public sealed class YoloNASEngine : InferenceEngine
                 XMin = xMin,
                 YMin = yMin,
                 XMax = xMax,
-                YMax = yMax
+                YMax = yMax,
+                Width = InputWidth,
+                Height = InputHeight
             };
         }
     }

@@ -2,5 +2,5 @@
 
 public interface ISmoothingFunction
 {
-    float Calculate(float dx, float dy);
+    float Calculate(float distance);
 }
