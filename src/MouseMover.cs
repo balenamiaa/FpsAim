@@ -52,6 +52,10 @@ public sealed partial class MouseMover : IDisposable
         return GetAsyncKeyState(0x05) != 0;
     }
 
+    public static bool IsLeftMouseButtonDown()
+    {
+        return GetAsyncKeyState(0x01) != 0;
+    }
 
     [LibraryImport("user32.dll")]
     public static partial short GetAsyncKeyState(int vKey);

@@ -7,29 +7,46 @@ namespace FpsAim;
 // ReSharper disable once InconsistentNaming
 public sealed class YoloNASEngine : InferenceEngine
 {
-    private readonly DenseTensor<byte> _inputTensor;
-
     public YoloNASEngine(string modelPath, SessionOptions sessionOptions) : base(modelPath, sessionOptions)
     {
         var inputMeta = Session.InputMetadata;
         Debug.Assert(inputMeta.Count == 1);
         Debug.Assert(inputMeta.First().Key == "input");
-        _inputTensor = new DenseTensor<byte>([1, 3, InputWidth, InputHeight]);
     }
 
 
-    public override void Infer(ReadOnlySpan<byte> input, int width, int height, float confidenceThreshold)
+    public override void Infer(Memory<float> input, int width, int height, float confidenceThreshold)
     {
         base.Infer(input, width, height, confidenceThreshold);
-        ProcessImageFromBGRAInto_U8RGB(input, _inputTensor, width, height);
+        var tensor = FromRgb32(input);
 
         var inputs = new List<NamedOnnxValue>
         {
-            NamedOnnxValue.CreateFromTensor("input", _inputTensor)
+            NamedOnnxValue.CreateFromTensor("input", tensor)
         };
 
         using var outputs = Session.Run(inputs);
         ParseOutput(outputs, confidenceThreshold);
+    }
+
+
+    private DenseTensor<byte> FromRgb32(Memory<float> input)
+    {
+        var tensor = new DenseTensor<byte>(new[] { 1, 3, InputHeight, InputWidth });
+
+        Parallel.For(0, InputHeight, y =>
+        {
+            for (var x = 0; x < InputWidth; x++)
+            {
+                var index = y * InputWidth + x;
+                var value = input.Span[index];
+                tensor[0, 0, y, x] = (byte)(value * 255);
+                tensor[0, 1, y, x] = (byte)(value * 255);
+                tensor[0, 2, y, x] = (byte)(value * 255);
+            }
+        });
+
+        return tensor;
     }
 
 

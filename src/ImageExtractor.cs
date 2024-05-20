@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
-using SharpGen.Runtime;
 
 namespace FpsAim;
 
@@ -18,7 +17,9 @@ public class ImageExtractor
 
     public void BeginLoop()
     {
-        var screenCapturer = new ScreenCapturer(0);
+        var width = 640;
+        var height = 640;
+        var screenCapturer = new ScreenCapturer(0, width, height);
         var lastTime = new Stopwatch();
         lastTime.Start();
         while (true)
@@ -28,13 +29,25 @@ public class ImageExtractor
                 if (lastTime.ElapsedMilliseconds <= 500) continue;
 
                 var frame = screenCapturer.CaptureFrame();
-                if (frame.Length == 0) continue;
+                if (frame is null) continue;
 
                 var path = Path.Combine(_outputDirectory, $"{Guid.NewGuid()}.png");
-                using var bitmap = new Bitmap(640, 640, PixelFormat.Format32bppArgb);
+                using var bitmap = new Bitmap(640, 640, PixelFormat.Format24bppRgb);
                 var bmpData = bitmap.LockBits(new Rectangle(0, 0, 640, 640), ImageLockMode.WriteOnly,
                     bitmap.PixelFormat);
-                Buffer.MemoryCopy(frame.GetPointerUnsafe(), bmpData.Scan0.ToPointer(), frame.Length, frame.Length);
+                var pBmp = (byte*)bmpData.Scan0;
+                Parallel.For(0, height, y =>
+                {
+                    for (var x = 0; x < width; x++)
+                    {
+                        var pixelR = frame.Value.Span[y * width + x];
+                        var pixelG = frame.Value.Span[y * width + x + width * height];
+                        var pixelB = frame.Value.Span[y * width + x + 2 * width * height];
+                        pBmp[y * bmpData.Stride + x * 3] = (byte)(pixelB * 255);
+                        pBmp[y * bmpData.Stride + x * 3 + 1] = (byte)(pixelG * 255);
+                        pBmp[y * bmpData.Stride + x * 3 + 2] = (byte)(pixelR * 255);
+                    }
+                });
 
                 bitmap.UnlockBits(bmpData);
                 bitmap.Save(path, ImageFormat.Png);

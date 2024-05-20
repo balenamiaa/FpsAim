@@ -78,9 +78,9 @@ public class AimAssistModule(AimAssistConfiguration configuration)
         {
             configuration.ActivationCondition.Update();
             var frame = screenCapturer.CaptureFrame();
-            if (frame.Length == 0) continue;
+            if (frame is null) continue;
 
-            configuration.Engine.Infer(frame, configuration.CaptureWidth, configuration.CaptureHeight,
+            configuration.Engine.Infer(frame.Value, configuration.CaptureWidth, configuration.CaptureHeight,
                 configuration.ConfidenceThreshold);
 
             var detections = NonMaximumSuppression.Applied(configuration.Engine.GetBestDetections(), 0.5f);
@@ -115,7 +115,12 @@ public class AimAssistModule(AimAssistConfiguration configuration)
             totalTimeMs += elapsedMs;
             frames++;
 
-            if (frames % 100 == 0) Console.WriteLine($"Total time: {totalTimeMs / (float)frames} ms");
+            if (frames % 1000 == 0)
+            {
+                Console.WriteLine($"Total time: {totalTimeMs / (float)frames} ms");
+                frames = 0;
+                totalTimeMs = 0;
+            }
 
             stopwatch.Restart();
         }
@@ -158,8 +163,9 @@ public class AimAssistModule(AimAssistConfiguration configuration)
         for (var i = 0; i < warmupFrames; i++)
         {
             var frame = screenCapturer.CaptureFrame();
-            if (frame.Length == 0) continue;
-            configuration.Engine.Infer(frame, configuration.CaptureWidth, configuration.CaptureHeight, 0.1f);
+            if (frame is null) continue;
+
+            configuration.Engine.Infer(frame.Value, configuration.CaptureWidth, configuration.CaptureHeight, 0.1f);
         }
     }
 }

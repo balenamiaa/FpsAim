@@ -7,7 +7,6 @@ namespace FpsAim;
 // ReSharper disable once InconsistentNaming
 public sealed class YoloV8Engine : InferenceEngine
 {
-    private readonly DenseTensor<float> _inputTensor;
     private readonly int MaxClassIndex;
     private readonly int MaxDetections;
 
@@ -19,18 +18,17 @@ public sealed class YoloV8Engine : InferenceEngine
         Debug.Assert(inputMeta.First().Key == "images");
         MaxClassIndex = outputMeta.First().Value.Dimensions[1];
         MaxDetections = outputMeta.First().Value.Dimensions[2];
-        _inputTensor = new DenseTensor<float>([1, 3, InputWidth, InputHeight]);
     }
 
 
-    public override void Infer(ReadOnlySpan<byte> input, int width, int height, float confidenceThreshold)
+    public override void Infer(Memory<float> input, int width, int height, float confidenceThreshold)
     {
         base.Infer(input, width, height, confidenceThreshold);
-        ProcessImageFromBGRAInto_F32RGB(input, _inputTensor, width, height);
+        var tensor = new DenseTensor<float>(input.ToArray(), [1, 3, InputHeight, InputWidth]);
 
         var inputs = new List<NamedOnnxValue>
         {
-            NamedOnnxValue.CreateFromTensor("images", _inputTensor)
+            NamedOnnxValue.CreateFromTensor("images", tensor)
         };
 
         using var outputs = Session.Run(inputs);

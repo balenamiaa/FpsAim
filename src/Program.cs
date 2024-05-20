@@ -1,23 +1,29 @@
 ﻿using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 
 namespace FpsAim;
 
 public static class Program
 {
+    [SuppressMessage("ReSharper", "FunctionNeverReturns")]
     private static void BenchmarkScreenCapturer()
     {
-        using var screenCapturer = new ScreenCapturer(0);
+        using var screenCapturer = new ScreenCapturer(0, 640, 640);
 
-        var totalTimeMilliseconds = 0.0;
-        for (var i = 0; i < 100; i++)
+
+        while (true)
         {
-            var stopwatch = Stopwatch.StartNew();
-            _ = screenCapturer.CaptureFrame();
-            stopwatch.Stop();
-            totalTimeMilliseconds += stopwatch.Elapsed.TotalMilliseconds;
-        }
+            var totalTimeMilliseconds = 0.0;
+            for (var i = 0; i < 100; i++)
+            {
+                var stopwatch = Stopwatch.StartNew();
+                _ = screenCapturer.CaptureFrame();
+                stopwatch.Stop();
+                totalTimeMilliseconds += stopwatch.Elapsed.TotalMilliseconds;
+            }
 
-        Console.WriteLine($"Average time: {totalTimeMilliseconds / 100} ms");
+            Console.WriteLine($"Average time: {totalTimeMilliseconds / 100} ms");
+        }
     }
 
     private static AimAssistConfiguration FlickConfiguration => new()
@@ -29,8 +35,8 @@ public static class Program
         Engine = new YoloV8Engine("v8-n.onnx", AimAssistConfiguration.GetSessionOptions(Executer.TensorRT)),
         TargetPredictor = new LinearPredictor(),
         SmoothingFunction = new NullSmoothing(),
-        XCorrectionMultiplier = 22.0f,
-        YCorrectionMultiplier = 22.0f / 1.2f,
+        XCorrectionMultiplier = 22.0f * (640.0f / 1280.0f),
+        YCorrectionMultiplier = 22.0f / 1.2f * (640.0f / 1280.0f),
         ActivationCondition = new ClickOnceActivationCondition(ClickOnceActivationCondition.ClickMouseButton.Mouse5)
     };
 
@@ -41,16 +47,16 @@ public static class Program
         CaptureWidth = 448,
         CaptureHeight = 448,
         Engine = new YoloV8Engine("v8-n.onnx", AimAssistConfiguration.GetSessionOptions(Executer.TensorRT)),
-        TargetPredictor = new NullPredictor(),
-        SmoothingFunction = new SigmoidSmoothing(1f, 2.4f, 1.6f, 2f),
-        XCorrectionMultiplier = 640.0f,
-        YCorrectionMultiplier = 22.0f / 1.2f,
-        ActivationCondition = new ToggleActivationCondition(ToggleActivationCondition.ToggleMouseButton.Mouse4)
+        TargetPredictor = new LinearPredictor(),
+        SmoothingFunction = new SigmoidSmoothing(1f, 0.6f, 1.6f, 3f),
+        XCorrectionMultiplier = 22.0f * (640.0f / 1280.0f),
+        YCorrectionMultiplier = 22.0f / 1.2f * (640.0f / 1280.0f),
+        ActivationCondition = new KeyNotDownActivationCondition(KeyNotDownActivationCondition.MouseButton.LButton)
     };
 
     private static void RunAimAssist()
     {
-        var aimAssistModule = new AimAssistModule(FlickConfiguration);
+        var aimAssistModule = new AimAssistModule(TrackingConfiguration);
         aimAssistModule.Run();
     }
 
