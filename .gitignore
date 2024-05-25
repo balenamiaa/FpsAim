@@ -5,6 +5,7 @@ AimAssist/obj/
 /.idea/
 ExtractAllCs.csx
 src.7z
+extracted_code.txt
 Native/bin/
 Native/obj/
 .vscode/
