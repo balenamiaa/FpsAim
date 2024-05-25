@@ -1,6 +1,10 @@
 ﻿/.venv/
 /interception/
-/bin/
-/obj/
+AimAssist/bin/
+AimAssist/obj/
 /.idea/
 ExtractAllCs.csx
+src.7z
+Native/bin/
+Native/obj/
+.vscode/

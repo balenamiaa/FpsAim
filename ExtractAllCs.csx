@@ -1,7 +1,7 @@
 ﻿using System.IO;
 using System.Text;
 
-string srcFolderPath = "src";
+string srcFolderPath = "AimAssist";
 string outputFilePath = "extracted_code.txt";
 
 if (!Directory.Exists(srcFolderPath))
