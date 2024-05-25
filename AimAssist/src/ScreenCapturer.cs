@@ -11,6 +11,7 @@ using Windows.Win32.Graphics.Direct3D11;
 using Windows.Win32.Graphics.Dxgi;
 using Windows.Win32.Graphics.Dxgi.Common;
 using Windows.Win32.System.Com;
+using Windows.Win32.System.StationsAndDesktops;
 using Windows.Win32.UI.HiDpi;
 using D3D11_BIND_FLAG = Windows.Win32.Graphics.Direct3D11.D3D11_BIND_FLAG;
 using D3D11_BUFFER_DESC = Windows.Win32.Graphics.Direct3D11.D3D11_BUFFER_DESC;
@@ -80,7 +81,8 @@ public sealed unsafe class ScreenCapturer : IDisposable
         }
 
         IDXGIOutputDuplication* duplication;
-        _output->DuplicateOutput((IUnknown*)_device, &duplication);
+        _output->DuplicateOutput1((IUnknown*)_device, 0,
+            [DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT.DXGI_FORMAT_R16G16B16A16_FLOAT], &duplication);
 
         _duplication = duplication;
         _captureRegionBuffer = CreateCaptureRegionBuffer(_device, CaptureWidth, CaptureHeight);
@@ -121,62 +123,95 @@ public sealed unsafe class ScreenCapturer : IDisposable
 
     public IScreenCaptureOutput CaptureFrame()
     {
-        var hr = AcquireNextFrame(0, _duplication, out _, out var desktopResource);
-
-        if (hr != HRESULT.S_OK)
+        try
         {
-            if (hr == HRESULT.DXGI_ERROR_WAIT_TIMEOUT)
+            var hr = AcquireNextFrame(0, _duplication, out _, out var desktopResource);
+
+            if (hr != HRESULT.S_OK)
             {
-                return new ScreenCaptureOutputNotAvailable();
+                if (hr == HRESULT.DXGI_ERROR_WAIT_TIMEOUT)
+                {
+                    return new ScreenCaptureOutputNotAvailable();
+                }
+
+                if (hr == HRESULT.DXGI_ERROR_ACCESS_LOST)
+                {
+                    ReacquireDuplication();
+                    return new ScreenCaptureOutputNotAvailable();
+                }
+
+                if (hr == HRESULT.DXGI_ERROR_ACCESS_DENIED)
+                {
+                    return new ScreenCaptureOutputNotAvailable();
+                }
+
+                throw new COMException("Failed to acquire next frame", hr);
             }
 
-            if (hr == HRESULT.DXGI_ERROR_ACCESS_LOST || hr == HRESULT.DXGI_ERROR_DEVICE_REMOVED)
-            {
-                ReacquireDuplication();
-                return new ScreenCaptureOutputNotAvailable();
-            }
+            var desktopResourceD3D11 = QueryInterface<ID3D11Resource>((IUnknown*)desktopResource);
+            var captureFrameResource = QueryInterface<ID3D11Resource>((IUnknown*)_capturedFrameTexture);
 
-            if (hr == HRESULT.DXGI_ERROR_ACCESS_DENIED)
-            {
-                return new ScreenCaptureOutputNotAvailable();
-            }
+            _context->CopySubresourceRegion(captureFrameResource, 0, 0, 0, 0, desktopResourceD3D11, 0, _centerBox);
 
-            throw new COMException("Failed to acquire next frame", hr);
+            ID3D11ShaderResourceView* shaderResource;
+            _device->CreateShaderResourceView(captureFrameResource, (D3D11_SHADER_RESOURCE_VIEW_DESC?)null,
+                &shaderResource);
+            _context->CSSetShaderResources(0, 1, &shaderResource);
+
+            uint dispatchX = (uint)Math.Ceiling(CaptureWidth / 8.0);
+            uint dispatchY = (uint)Math.Ceiling(CaptureHeight / 8.0);
+            _context->Dispatch(dispatchX, dispatchY, 1);
+
+            _duplication->ReleaseFrame();
+
+            LastFrameTimeTicks = Stopwatch.GetTimestamp();
+
+            return new ScreenCaptureOutputAvailable(_context, _stagingBuffer, _outputBuffer, _outputBufferCudaResource,
+                CaptureWidth, CaptureHeight, _preallocatedBuffer);
         }
-
-        var desktopResourceD3D11 = QueryInterface<ID3D11Resource>((IUnknown*)desktopResource);
-        var captureFrameResource = QueryInterface<ID3D11Resource>((IUnknown*)_capturedFrameTexture);
-
-        _context->CopySubresourceRegion(captureFrameResource, 0, 0, 0, 0, desktopResourceD3D11, 0, _centerBox);
-
-        ID3D11ShaderResourceView* shaderResource;
-        _device->CreateShaderResourceView(captureFrameResource, (D3D11_SHADER_RESOURCE_VIEW_DESC?)null,
-            &shaderResource);
-        _context->CSSetShaderResources(0, 1, &shaderResource);
-
-        uint dispatchX = (uint)Math.Ceiling(CaptureWidth / 8.0);
-        uint dispatchY = (uint)Math.Ceiling(CaptureHeight / 8.0);
-        _context->Dispatch(dispatchX, dispatchY, 1);
-
-        _duplication->ReleaseFrame();
-
-        LastFrameTimeTicks = Stopwatch.GetTimestamp();
-
-        return new ScreenCaptureOutputAvailable(_context, _stagingBuffer, _outputBuffer, _outputBufferCudaResource,
-            CaptureWidth, CaptureHeight, _preallocatedBuffer);
+        catch (UnauthorizedAccessException e)
+        {
+            _logger.LogError(e, "Failed to capture frame");
+            ReacquireDuplication();
+            return new ScreenCaptureOutputNotAvailable();
+        }
+        catch (Exception e)
+        {
+            _logger.LogError(e, "Failed to capture frame");
+            return new ScreenCaptureOutputNotAvailable();
+        }
     }
 
-    public void ReacquireDuplication()
+    private void ReacquireDuplication()
     {
         _duplication->Release();
-
-        fixed (IDXGIOutputDuplication** duplication = &_duplication)
+        _duplication = null;
+        while ((nint)_duplication == nint.Zero)
         {
-            _output->DuplicateOutput((IUnknown*)_device, duplication);
+            Thread.Sleep(1000);
+            try
+            {
+                fixed (IDXGIOutputDuplication** duplication = &_duplication)
+                {
+                    _output->DuplicateOutput1((IUnknown*)_device, 0,
+                        [DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT.DXGI_FORMAT_R16G16B16A16_FLOAT],
+                        duplication);
+                }
+            }
+            catch (Exception)
+            {
+                _logger.LogError("Failed to reacquire duplication. Switching thread desktop");
+                if (PInvoke.OpenInputDesktop(DESKTOP_CONTROL_FLAGS.DF_ALLOWOTHERACCOUNTHOOK, false,
+                        DESKTOP_ACCESS_FLAGS.DESKTOP_SWITCHDESKTOP) is { } hDesk)
+                {
+                    PInvoke.SetThreadDesktop(hDesk);
+                }
+            }
         }
     }
 
-    private void Initialize(uint gpuIndex, uint monitorIndex, out IDXGIAdapter4* adapter, out IDXGIOutput6* output,
+    private static void Initialize(uint gpuIndex, uint monitorIndex, out IDXGIAdapter4* adapter,
+        out IDXGIOutput6* output,
         out uint screenWidth, out uint screenHeight)
     {
         PInvoke.CoInitializeEx(null, COINIT.COINIT_MULTITHREADED);
@@ -410,22 +445,10 @@ public sealed unsafe class ScreenCapturer : IDisposable
         IDXGIResource* pDesktopResource;
         var lpVtbl = *(void***)duplication;
         var hr =
-            ((delegate *unmanaged [Stdcall]<IDXGIOutputDuplication*, uint, DXGI_OUTDUPL_FRAME_INFO*, IDXGIResource**,
+            ((delegate* unmanaged[Stdcall]<IDXGIOutputDuplication*, uint, DXGI_OUTDUPL_FRAME_INFO*, IDXGIResource**,
                 HRESULT>)lpVtbl[8])(duplication, timeout, &frameInfoLocal, &pDesktopResource);
         frameInfo = frameInfoLocal;
         desktopResource = pDesktopResource;
-        // var unwrapHResult = ComHelpers.UnwrapCCW(duplication, out IDXGIOutputDuplication.Interface __object);
-        // if (unwrapHResult != HRESULT.S_OK)
-        // {
-        //     frameInfo = default;
-        //     desktopResource = null;
-        //     return unwrapHResult;
-        // }
-        //
-        // IDXGIResource* pResource;
-        // var hresult = __object.AcquireNextFrame(0, out frameInfo, &pResource);
-        // desktopResource = pResource;
-        //
         return hr;
     }
 

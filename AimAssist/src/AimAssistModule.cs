@@ -31,7 +31,7 @@ public class AimAssistModule : IDisposable
         _config = config;
         _mouseMover = new MouseMover();
         _screenCapturer = new ScreenCapturer(0, 0, config.CaptureWidth, config.CaptureHeight);
-        _inferenceOutputChannel = Channel.CreateUnbounded<InferenceOutput>();
+        _inferenceOutputChannel = Channel.CreateBounded<InferenceOutput>(64);
         _screenWidth = _screenCapturer.ScreenWidth;
         _screenHeight = _screenCapturer.ScreenHeight;
         _classIdTargets = config.Targets.Select(target => target.ToClassId()).ToArray();
@@ -68,43 +68,27 @@ public class AimAssistModule : IDisposable
         await _inferenceOutputChannel.Reader.WaitToReadAsync();
         Console.WriteLine("AimAssist is running...");
 
-        await foreach (var inferenceOutput in _inferenceOutputChannel.Reader.ReadAllAsync())
+
+        while (!_inferenceLoopCts.IsCancellationRequested)
         {
-            loopMetrics.Update(inferenceOutput.InferenceTimeMs, inferenceOutput.ScreenCaptureTimeMs);
             _config.ActivationCondition.Update();
             _config.SmoothingFunction.Update();
 
+            var inferenceOutput = await _inferenceOutputChannel.Reader.ReadAsync();
+            loopMetrics.Update(inferenceOutput.InferenceTimeMs, inferenceOutput.ScreenCaptureTimeMs);
+
             if (inferenceOutput.Detections.Length == 0)
-            {
-                _config.TargetPredictor.Reset();
-                lastDetectionTime.Reset();
                 goto loopEnd;
-            }
 
             var classIdTargets = _classIdTargets;
             var detection = Array.Find(inferenceOutput.Detections, d => classIdTargets.Contains(d.ClassId));
 
             if (!detection.IsPopulated)
-            {
-                _config.TargetPredictor.Reset();
-                lastDetectionTime.Reset();
                 goto loopEnd;
-            }
-
 
             var targetX = (detection.XMin + detection.XMax) / 2f;
             var targetY = (detection.YMin + detection.YMax) / 2f;
-
-            Vector2 predictedPos;
-            if (lastDetectionTime.IsRunning)
-            {
-                var dt = (float)lastDetectionTime.Elapsed.TotalSeconds;
-                predictedPos = _config.TargetPredictor.Predict(new Vector2(targetX, targetY), dt);
-            }
-            else
-            {
-                predictedPos = new Vector2(targetX, targetY);
-            }
+            var predictedPos = _config.TargetPredictor.Predict(new Vector2(targetX, targetY), (float)lastDetectionTime.Elapsed.TotalSeconds);
 
             if (_config.ActivationCondition.ShouldAimAssist())
             {
@@ -116,15 +100,16 @@ public class AimAssistModule : IDisposable
                 var dy = offsetPos.Y - centerY;
 
                 var smoothFactor = _config.SmoothingFunction.Calculate(distUnits, 1.0f);
+
                 var dxSmooth = (int)MathF.Ceiling(_config.XCorrectionMultiplier * dx * smoothFactor);
                 var dySmooth = (int)MathF.Ceiling(_config.YCorrectionMultiplier * dy * smoothFactor);
 
                 _mouseMover.MoveRelative(dxSmooth, dySmooth);
             }
 
-            lastDetectionTime.Restart();
-
         loopEnd:
+            lastDetectionTime.Restart();
+            _config.TargetPredictor.Reset();
             if (loopMetrics.LoopCount % 1000 == 0)
             {
                 loopMetrics.PrintAndReset();
@@ -146,37 +131,45 @@ public class AimAssistModule : IDisposable
         var writer = _inferenceOutputChannel.Writer;
 
         var st = Stopwatch.StartNew();
-        while (!ct.IsCancellationRequested)
+
+        try
         {
-            st.Restart();
-
-            var capturedFrame = _screenCapturer.CaptureFrame();
-            var screenCaptureTime = st.ElapsedMilliseconds;
-            st.Restart();
-
-            if (capturedFrame is ScreenCaptureOutputNotAvailable)
+            while (!ct.IsCancellationRequested)
             {
-                continue;
+                st.Restart();
+
+                var capturedFrame = _screenCapturer.CaptureFrame();
+                var screenCaptureTime = st.ElapsedMilliseconds;
+                st.Restart();
+
+                if (capturedFrame is ScreenCaptureOutputNotAvailable)
+                {
+                    continue;
+                }
+
+                using var mappedTensor = ((ScreenCaptureOutputAvailable)capturedFrame).GetGpuMappedTensor();
+                var tensor = mappedTensor.Tensor;
+                _onnxIoBinding.BindInput("images", tensor);
+                _config.Engine.RunWithBinding(_onnxRunOptions, _onnxIoBinding);
+                _onnxIoBinding.ClearBoundInputs();
+                var detections = ParseOutput(_onnxOutput, _config.ConfidenceThreshold);
+
+                var inferenceTime = st.ElapsedMilliseconds;
+
+                await writer.WriteAsync(new InferenceOutput
+                {
+                    Detections = NonMaxSuppression(detections.Span, 0.5f).ToArray(),
+                    InferenceTimeMs = inferenceTime,
+                    ScreenCaptureTimeMs = screenCaptureTime
+                }, ct);
             }
-
-            using var mappedTensor = ((ScreenCaptureOutputAvailable)capturedFrame).GetGpuMappedTensor();
-            var tensor = mappedTensor.Tensor;
-            _onnxIoBinding.BindInput("images", tensor);
-            _config.Engine.RunWithBinding(_onnxRunOptions, _onnxIoBinding);
-            _onnxIoBinding.ClearBoundInputs();
-            var detections = ParseOutput(_onnxOutput, _config.ConfidenceThreshold);
-
-            var inferenceTime = st.ElapsedMilliseconds;
-
-            await writer.WriteAsync(new InferenceOutput
-            {
-                Detections = NonMaxSuppression(detections.Span, 0.5f).ToArray(),
-                InferenceTimeMs = inferenceTime,
-                ScreenCaptureTimeMs = screenCaptureTime
-            }, ct);
+        }
+        finally
+        {
+            writer.Complete();
         }
 
-        writer.Complete();
+
     }
 
     private Memory<DetectionResult> ParseOutput(OrtValue onnxOutput, float confidenceThreshold)

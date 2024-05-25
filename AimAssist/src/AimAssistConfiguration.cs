@@ -17,11 +17,22 @@ public struct AimAssistConfiguration
 
     public static AimAssistConfiguration GetCs2Configuration()
     {
+        StickySmoothing.Breakpoint[] breakpoints = [
+            new() { Distance = 0.0f, Value = 0.0f },
+            new() { Distance = 0.1f, Value = 0.24f },
+            new() { Distance = 0.65f, Value = 0.08f },
+            new() { Distance = 1.0f, Value = 0.01f },
+            new() { Distance = 2f, Value = 0.005f },
+            new() { Distance = 5.0f, Value = 0.005f },
+            new() { Distance = 100.0f, Value = 0.00001f }
+        ];
+
         return new AimAssistConfiguration
         {
-            Engine = CreateAimAssistSession("v8-nn.onnx", AimAssistAccelerator.TensorRT),
+            Engine = CreateAimAssistSession("v8-nn.onnx", AimAssistAccelerator.CUDA),
             TargetPredictor = new NullPredictor(),
-            SmoothingFunction = new ProgressiveSigmoidSmoothing(2.0f, 0.05f, 0.15f, 2.5f, 4.0f),
+            // SmoothingFunction = new ProgressiveSmoothing(new SigmoidSmoothing(2.0f, 0.10f, 0.18f, 2.5f), 4.0f),
+            SmoothingFunction = new ProgressiveSmoothing(new StickySmoothing(breakpoints), 4.0f),
             ActivationCondition = new ToggleActivationCondition(MouseButton.XButton1),
             Targets = [AimAssistTarget.Head],
             ConfidenceThreshold = 0.6f,

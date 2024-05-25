@@ -1,7 +1,13 @@
 {
-    "$schema": "https://aka.ms/CsWin32.schema.json",
-    "emitSingleFile": false,
-    "public": true,
-    "allowMarshaling": false,
-    "useSafeHandles": false
+  "$schema": "https://aka.ms/CsWin32.schema.json",
+  "emitSingleFile": false,
+  "public": true,
+  "allowMarshaling": false,
+  "useSafeHandles": false,
+  "friendlyOverloads": {
+    "enabled": true
+  },
+  "comInterop": {
+    "useIntPtrForComOutPointers": false
   }
+}
