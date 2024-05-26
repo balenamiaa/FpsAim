@@ -30,6 +30,7 @@
 
     <ItemGroup>
       <ProjectReference Include="..\Native\Native.csproj" />
+      <ProjectReference Include="..\FpsAim.Shared\FpsAim.Shared.csproj" />
     </ItemGroup>
 
 </Project>

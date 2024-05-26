@@ -1,0 +1,160 @@
+﻿@page "/"
+@using System.IO.Pipes
+@using FpsAim.Shared
+@rendermode InteractiveServer
+<PageTitle>Home</PageTitle>
+
+<div class="flex flex-1 gap-1 justify-center">
+    <div class="flex flex-col gap-2 border-amber-400 hover:border-amber-700 border-2 p-4 shadow-lg">
+        <div class="flex flex-row">
+            <h1>Confidence Threshold:</h1>
+            <input class="outline-none border-2 border-gray-400 focus:border-gray-800 mx-1 text-center w-12 rounded-sm"
+                type="number" min="0" max="1" step="0.05" @bind="confidenceThreshold" />
+        </div>
+
+        <div class="flex flex-row">
+            <h1>X Sensitivity:</h1>
+            <input class="outline-none border-2 border-gray-400 focus:border-gray-800 mx-1 text-center w-12 rounded-sm"
+                type="number" min="0" max="100" step="0.05" @bind="xSensitivity" />
+        </div>
+        <div class="flex flex-row">
+            <h1>Y Sensitivity:</h1>
+            <input class="outline-none border-2 border-gray-400 focus:border-gray-800 mx-1 text-center w-12 rounded-sm"
+                type="number" min="0" max="100" step="0.05" @bind="ySensitivity" />
+        </div>
+        <div class="flex flex-row">
+            <h1>DPI:</h1>
+            <input class="outline-none border-2 border-gray-400 focus:border-gray-800 mx-1 text-center w-16 rounded-sm"
+                type="number" min="0" max="10000" step="0.05" @bind="dpi" />
+        </div>
+    </div>
+
+    <div class="flex flex-col gap-2 border-amber-400 hover:border-amber-700 border-2 p-4 shadow-lg">
+        @for (int i = 1; i < breakpoints.Length; i++)
+        {
+            <div class="flex flex-row">
+                <h1>Breakpoint @i:</h1>
+                <input
+                    class="outline-none border-2 border-gray-400 focus:border-gray-800 mx-1 text-center w-16 rounded-sm disable-step"
+                    type="number" min="0" max="100" step="0.01" @bind="breakpoints[i][0]" />
+                <input
+                    class="outline-none border-2 border-gray-400 focus:border-gray-800 mx-1 text-center w-16 rounded-sm disable-step"
+                    type="number" min="0" max="1" step="0.01" @bind="breakpoints[i][1]" />
+            </div>
+        }
+    </div>
+
+    <div class="flex flex-col gap-2 border-amber-400 hover:border-amber-700 border-2 p-4 shadow-lg">
+        <div class="flex flex-row">
+            <h1>Target Box X-Offset (%):</h1>
+            <input
+                class="outline-none border-2 border-gray-400 focus:border-gray-800 mx-1 text-center w-16 rounded-sm disable-step"
+                type="number" min="0" max="1" step="0.01" @bind="targetBoxXOffset" />
+        </div>
+
+        <div class="flex flex-row">
+            <h1>Target Box Y-Offset (%):</h1>
+            <input
+                class="outline-none border-2 border-gray-400 focus:border-gray-800 mx-1 text-center w-16 rounded-sm disable-step"
+                type="number" min="0" max="1" step="0.01" @bind="targetBoxYOffset" />
+        </div>
+        using System.IO.Pipes;
+
+        <div class="flex flex-row">
+            <h1>Progress Factor:</h1>
+            <input
+                class="outline-none border-2 border-gray-400 focus:border-gray-800 mx-1 text-center w-16 rounded-sm disable-step"
+                type="number" min="0" max="100" step="0.01" @bind="progressFactor" />
+        </div>
+    </div>
+</div>
+
+<div class="flex flex-row m-2 gap-2 max-w-[100rem] mx-auto">
+    <button class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded w-full"
+        @onclick="Save">Save</button>
+    <button class="bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-4 rounded w-full"
+        @onclick="Load">Load</button>
+</div>
+
+
+
+
+@code {
+    private float confidenceThreshold = 0.5f;
+    private float xSensitivity = 1.0f;
+    private float ySensitivity = 1.2f;
+    private float dpi = 1280f;
+    private float[][] breakpoints = [
+    [0.0f, 0.0f],
+[0.15f, 0.035f],
+[0.55f, 0.025f],
+[1.0f, 0.017f],
+[1.5f, 0.0066f],
+[2f, 0.0016f],
+[5.0f, 0.0008f],
+[100.0f, 0.000001f]
+    ];
+
+    private float targetBoxXOffset = 0.5f;
+    private float targetBoxYOffset = 0.3f;
+    private float progressFactor = 5.0f;
+
+
+    private NamedPipeClientStream clientStream = new NamedPipeClientStream(".", "AimAssistPipe", PipeDirection.InOut,
+    PipeOptions.Asynchronous);
+    private StreamWriter? writer;
+    private StreamReader? reader;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await base.OnInitializedAsync();
+        await clientStream.ConnectAsync();
+        writer = new StreamWriter(clientStream);
+        reader = new StreamReader(clientStream);
+
+        Load();
+    }
+
+    private async void Save()
+    {
+        if (writer == null) return;
+
+        var aimSettings = new AimAssistSettings(
+        confidenceThreshold,
+        xSensitivity,
+        ySensitivity,
+        dpi,
+        breakpoints,
+        targetBoxXOffset,
+        targetBoxYOffset,
+        progressFactor
+        );
+
+        await writer.WriteAsync("set-data:" + aimSettings.Serialize());
+    }
+
+    private async void Load()
+    {
+        if (writer == null) return;
+        if (reader == null) return;
+
+        await writer.WriteAsync("get-data:");
+        var response = await reader.ReadLineAsync();
+
+        if (response == null) return;
+
+        var data = response.Split(':')[1];
+        var aimSettings = AimAssistSettings.Deserialize(data);
+
+        if (aimSettings == null) return;
+
+        confidenceThreshold = aimSettings.ConfidenceThreshold;
+        xSensitivity = aimSettings.XSensitivity;
+        ySensitivity = aimSettings.YSensitivity;
+        dpi = aimSettings.Dpi;
+        breakpoints = aimSettings.Breakpoints;
+        targetBoxXOffset = aimSettings.TargetBoxXOffset;
+        targetBoxYOffset = aimSettings.TargetBoxYOffset;
+        progressFactor = aimSettings.ProgressFactor;
+    }
+}

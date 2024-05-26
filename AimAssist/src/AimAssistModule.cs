@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.IO.Pipes;
 using System.Numerics;
+using System.Text.Json;
 using System.Threading.Channels;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
@@ -13,8 +15,9 @@ public class AimAssistModule : IDisposable
     private readonly MouseMover _mouseMover;
     private readonly ScreenCapturer _screenCapturer;
     private readonly Channel<InferenceOutput> _inferenceOutputChannel;
-    private readonly CancellationTokenSource _inferenceLoopCts;
-    private Task? _inferenceLoopTask;
+    private readonly CancellationTokenSource _isRunning;
+    private readonly Thread _inferenceLoopThread;
+    private readonly Thread _communicationLoopThread;
     private readonly uint _screenWidth;
     private readonly uint _screenHeight;
     private readonly uint[] _classIdTargets;
@@ -47,18 +50,54 @@ public class AimAssistModule : IDisposable
             LogId = "AimAssistModule",
             LogSeverityLevel = OrtLoggingLevel.ORT_LOGGING_LEVEL_INFO,
         };
-        _inferenceLoopCts = new CancellationTokenSource();
+        _isRunning = new CancellationTokenSource();
+        _inferenceLoopThread = new Thread(async () =>
+        {
+            await RunInferenceLoopAsync(_isRunning.Token);
+        });
+        _communicationLoopThread = new Thread(async () =>
+        {
+            await RunCommunicationLoopAsync(_isRunning.Token);
+        });
+    }
+
+    private async Task RunCommunicationLoopAsync(CancellationToken token)
+    {
+        var pipe = new NamedPipeServerStream("AimAssistPipe", PipeDirection.InOut, 1, PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous);
+
+        await pipe.WaitForConnectionAsync(token);
+
+        var reader = new StreamReader(pipe);
+        var writer = new StreamWriter(pipe) { AutoFlush = true };
+
+        while (!token.IsCancellationRequested)
+        {
+            var line = await reader.ReadLineAsync(token);
+            if (line is null) break;
+
+            var idxOfSeparator = line.IndexOf(':');
+            if (idxOfSeparator == -1) continue;
+
+            var command = line[0..idxOfSeparator];
+            var data = line[(idxOfSeparator + 1)..];
+            switch (command)
+            {
+                case "get-data":
+                    await writer.WriteLineAsync("data:" + _config.GetDataForCommunication(_config));
+                    break;
+                case "set-data":
+                    if (JsonSerializer.Deserialize<FpsAim.Shared.AimAssistSettings>(data) is { } settings)
+                        _config.SetDataFromCommunication(_config, settings);
+                    break;
+            }
+        }
     }
 
     public async Task RunAsync()
     {
-
-        var thisCopy = this;
-        var _inferenceLoopCtsCopy = _inferenceLoopCts;
-        _inferenceLoopTask = Task.Run(async () =>
-        {
-            await thisCopy.RunInferenceLoopAsync(_inferenceLoopCtsCopy.Token);
-        });
+        _inferenceLoopThread.Start();
+        _communicationLoopThread.Start();
 
         var centerX = _screenWidth / 2f;
         var centerY = _screenHeight / 2f;
@@ -69,26 +108,41 @@ public class AimAssistModule : IDisposable
         Console.WriteLine("AimAssist is running...");
 
 
-        while (!_inferenceLoopCts.IsCancellationRequested)
+        const int desiredLoopTimeMicroseconds = 1_000;
+        Stopwatch loopStabilityTimer = new();
+        DetectionResult[] lastDetections = [];
+
+        while (!_isRunning.IsCancellationRequested)
         {
+            loopStabilityTimer.Restart();
             _config.ActivationCondition.Update();
             _config.SmoothingFunction.Update();
 
-            var inferenceOutput = await _inferenceOutputChannel.Reader.ReadAsync();
-            loopMetrics.Update(inferenceOutput.InferenceTimeMs, inferenceOutput.ScreenCaptureTimeMs);
+            DetectionResult[] currentDetections;
+            if (_inferenceOutputChannel.Reader.TryRead(out var newInferenceOutput))
+            {
+                loopMetrics.Update(newInferenceOutput.InferenceTimeMs, newInferenceOutput.ScreenCaptureTimeMs);
+                lastDetectionTime.Restart();
+                _config.TargetPredictor.Reset();
+                currentDetections = newInferenceOutput.Detections;
+            }
+            else
+            {
+                currentDetections = lastDetections;
+            }
 
-            if (inferenceOutput.Detections.Length == 0)
+            if (currentDetections.Length == 0)
                 goto loopEnd;
 
             var classIdTargets = _classIdTargets;
-            var detection = Array.Find(inferenceOutput.Detections, d => classIdTargets.Contains(d.ClassId));
+            var detection = Array.Find(currentDetections, d => classIdTargets.Contains(d.ClassId));
 
             if (!detection.IsPopulated)
                 goto loopEnd;
 
-            var targetX = (detection.XMin + detection.XMax) / 2f;
-            var targetY = (detection.YMin + detection.YMax) / 2f;
-            var predictedPos = _config.TargetPredictor.Predict(new Vector2(targetX, targetY), (float)lastDetectionTime.Elapsed.TotalSeconds);
+
+            var targetPos = _config.TargetPointSelector.SelectPoint(detection.XMin, detection.YMin, detection.XMax, detection.YMax);
+            var predictedPos = _config.TargetPredictor.Predict(targetPos, (float)lastDetectionTime.Elapsed.TotalSeconds);
 
             if (_config.ActivationCondition.ShouldAimAssist())
             {
@@ -108,18 +162,23 @@ public class AimAssistModule : IDisposable
             }
 
         loopEnd:
-            lastDetectionTime.Restart();
-            _config.TargetPredictor.Reset();
-            if (loopMetrics.LoopCount % 1000 == 0)
+            lastDetections = currentDetections;
+            if ((loopMetrics.LoopCount + 1) % 1000 == 0)
             {
                 loopMetrics.PrintAndReset();
             }
+
+
+            double loopElapsedNanoseconds;
+            do
+            {
+                loopElapsedNanoseconds = (double)loopStabilityTimer.ElapsedTicks / Stopwatch.Frequency * 1_000_000_000.0;
+                Thread.SpinWait(1);
+
+            } while (loopElapsedNanoseconds < desiredLoopTimeMicroseconds * 1000);
         }
 
-        if (_inferenceLoopTask.Exception is { } exception)
-        {
-            throw exception;
-        }
+        _inferenceLoopThread.Join();
     }
 
     private async Task RunInferenceLoopAsync(CancellationToken ct)
@@ -131,13 +190,11 @@ public class AimAssistModule : IDisposable
         var writer = _inferenceOutputChannel.Writer;
 
         var st = Stopwatch.StartNew();
-
         try
         {
             while (!ct.IsCancellationRequested)
             {
                 st.Restart();
-
                 var capturedFrame = _screenCapturer.CaptureFrame();
                 var screenCaptureTime = st.ElapsedMilliseconds;
                 st.Restart();
@@ -158,7 +215,7 @@ public class AimAssistModule : IDisposable
 
                 await writer.WriteAsync(new InferenceOutput
                 {
-                    Detections = NonMaxSuppression(detections.Span, 0.5f).ToArray(),
+                    Detections = NonMaxSuppression(detections.Span, 0.6f).ToArray(),
                     InferenceTimeMs = inferenceTime,
                     ScreenCaptureTimeMs = screenCaptureTime
                 }, ct);
@@ -288,7 +345,7 @@ public class AimAssistModule : IDisposable
 
     public void Dispose()
     {
-        _inferenceLoopCts.Cancel();
+        _isRunning.Cancel();
         _screenCapturer.Dispose();
         _mouseMover.Dispose();
     }

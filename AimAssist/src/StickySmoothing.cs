@@ -6,6 +6,11 @@ namespace AimAssist;
 internal class StickySmoothing(StickySmoothing.Breakpoint[] breakpoints) : ISmoothingFunction
 {
 
+    public Breakpoint[] Breakpoints {
+        get => breakpoints;
+        set => breakpoints = value;
+    }
+
     public float Calculate(float distance, float dt)
     {
         if (distance == 0.0f) return 0.0f;

@@ -2,6 +2,12 @@
 /interception/
 AimAssist/bin/
 AimAssist/obj/
+FpsAim.Shared/bin/
+FpsAim.Shared/obj/
+FpsAimUi/bin/
+FpsAimUi/obj/
+FpsAimUi/node_modules/
+FpsAimUi/package-lock.json
 /.idea/
 ExtractAllCs.csx
 src.7z
@@ -9,3 +15,4 @@ extracted_code.txt
 Native/bin/
 Native/obj/
 .vscode/
+cs2.json
