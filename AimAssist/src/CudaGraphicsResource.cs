@@ -18,6 +18,12 @@ public class CudaGraphicsResource(nint handle) : IDisposable
         {
             fixed (void** pHandle = &_handle)
             {
+                var resultMapFlagsSet = LibNVCuda.CudaGraphicsResourceSetMapFlags(_handle, 1);
+                if (resultMapFlagsSet != LibNVCuda.CUDA_SUCCESS)
+                {
+                    throw new ScreenCaptureException($"Failed to set map flags: {resultMapFlagsSet}");
+                }
+                
                 var result = LibNVCuda.CudaGraphicsMapResources(1, pHandle, 0);
                 if (result != LibNVCuda.CUDA_SUCCESS)
                 {

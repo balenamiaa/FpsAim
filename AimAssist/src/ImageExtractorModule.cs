@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.Runtime.CompilerServices;
+using Microsoft.ML.OnnxRuntime;
 
 namespace AimAssist;
 
@@ -35,9 +37,14 @@ internal class ImageExtractorModule(string outputDirectory, uint monitorIndex, i
                         {
                             for (var x = 0; x < width; x++)
                             {
-                                var pixelR = data.Span[y * width + x];
-                                var pixelG = data.Span[y * width + x + width * height];
-                                var pixelB = data.Span[y * width + x + 2 * width * height];
+                                var indexR = (y * width + x);
+                                var indexG = indexR + width * height;
+                                var indexB = indexG + width * height;
+
+                                var pixelR = data.Span[indexR].ToFloat();
+                                var pixelG = data.Span[indexG].ToFloat();
+                                var pixelB = data.Span[indexB].ToFloat();
+
                                 pBmp[y * bmpData.Stride + x * 3] = (byte)(pixelB * 255);
                                 pBmp[y * bmpData.Stride + x * 3 + 1] = (byte)(pixelG * 255);
                                 pBmp[y * bmpData.Stride + x * 3 + 2] = (byte)(pixelR * 255);

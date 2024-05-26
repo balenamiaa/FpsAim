@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.ML.OnnxRuntime;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -27,6 +28,11 @@ namespace AimAssist;
 [SupportedOSPlatform("windows10.0.17763")]
 public sealed unsafe class ScreenCapturer : IDisposable
 {
+    private const uint D3DCOMPILE_DEBUG = 1 << 0;
+    private const uint D3DCOMPILE_ENABLE_STRICTNESS = 1 << 11;
+    private const uint D3DCOMPILE_OPTIMIZATION_LEVEL3 = 1 << 15;
+    private const uint D3DCOMPILE_ALL_RESOURCES_BOUND = 1 << 21;
+
     private readonly ILogger _logger;
 
     private readonly IDXGIAdapter4* _adapter;
@@ -50,7 +56,7 @@ public sealed unsafe class ScreenCapturer : IDisposable
     public readonly uint CaptureWidth;
     public readonly uint CaptureHeight;
     private readonly D3D11_BOX _centerBox;
-    private readonly float[] _preallocatedBuffer;
+    private readonly Float16[] _preallocatedBuffer;
 
     public long LastFrameTimeTicks { get; private set; }
 
@@ -60,7 +66,7 @@ public sealed unsafe class ScreenCapturer : IDisposable
         _logger = logger ?? NullLogger.Instance;
         CaptureWidth = captureWidth;
         CaptureHeight = captureHeight;
-        _preallocatedBuffer = new float[3 * captureWidth * captureHeight];
+        _preallocatedBuffer = new Float16[3 * captureWidth * captureHeight];
 
         Initialize(gpuIndex, monitorIndex, out _adapter, out _output, out ScreenWidth, out ScreenHeight);
 
@@ -238,8 +244,12 @@ public sealed unsafe class ScreenCapturer : IDisposable
     {
         D3D_FEATURE_LEVEL[] featureLevels =
         [
+            D3D_FEATURE_LEVEL.D3D_FEATURE_LEVEL_12_1,
+            D3D_FEATURE_LEVEL.D3D_FEATURE_LEVEL_12_0,
             D3D_FEATURE_LEVEL.D3D_FEATURE_LEVEL_11_1,
         ];
+
+        D3D_FEATURE_LEVEL featureLevel;
 
         PInvoke.D3D11CreateDevice(
             (IDXGIAdapter*)_adapter,
@@ -249,10 +259,11 @@ public sealed unsafe class ScreenCapturer : IDisposable
             featureLevels,
             7,
             (ID3D11Device**)pDevice,
-            null,
+            &featureLevel,
             (ID3D11DeviceContext**)pContext
         );
 
+        _logger.LogInformation("Created device with feature level {}", featureLevel);
 
         var dxgiDevice = QueryInterface<IDXGIDevice4>((IUnknown*)*pDevice);
         dxgiDevice->SetMaximumFrameLatency(1);
@@ -263,7 +274,7 @@ public sealed unsafe class ScreenCapturer : IDisposable
     {
         var captureRegion = new CaptureRegion
         {
-            CaptureSize = new Int2((int)captureWidth, (int)captureHeight)
+            CaptureSize = new UInt2(captureWidth, captureHeight)
         };
 
         var bufferDesc = new D3D11_BUFFER_DESC
@@ -289,7 +300,7 @@ public sealed unsafe class ScreenCapturer : IDisposable
     {
         var bufferDesc = new D3D11_BUFFER_DESC
         {
-            ByteWidth = captureWidth * captureHeight * 3 * sizeof(float),
+            ByteWidth = (uint)(captureWidth * captureHeight * 3 * sizeof(Float16)),
             Usage = D3D11_USAGE.D3D11_USAGE_DEFAULT,
             BindFlags = D3D11_BIND_FLAG.D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_FLAG.D3D11_BIND_SHADER_RESOURCE,
             CPUAccessFlags = 0
@@ -328,40 +339,60 @@ public sealed unsafe class ScreenCapturer : IDisposable
         return pTexture;
     }
 
-    private static ID3D11ComputeShader* CreateComputeShader(ID3D11Device4* device)
+    private ID3D11ComputeShader* CreateComputeShader(ID3D11Device4* device)
     {
         const string shaderCode = @"
-    cbuffer CaptureRegion : register(b0)
+cbuffer CaptureRegion : register(b0)
+{
+    int2 captureSize;
+};
+
+RWStructuredBuffer<uint> output : register(u0);
+Texture2D<float4> inputTexture : register(t0);
+
+[numthreads(8, 8, 1)]
+void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
+{
+    if (dispatchThreadID.x >= captureSize.x || dispatchThreadID.y >= captureSize.y)
     {
-        int2 captureSize;
-    };
-
-    RWStructuredBuffer<float> output : register(u0);
-
-    Texture2D<float4> inputTexture : register(t0);
-
-    [numthreads(8, 8, 1)]
-    void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
-    {
-        if (dispatchThreadID.x >= captureSize.x || dispatchThreadID.y >= captureSize.y)
-        {
-            return;
-        }
-
-        int2 texCoord = dispatchThreadID.xy;
-        float4 color = inputTexture[texCoord];
-
-        int width = captureSize.x;
-        int height = captureSize.y;
-
-        int bufferIndexR = dispatchThreadID.y * width + dispatchThreadID.x;
-        int bufferIndexG = height * width + bufferIndexR;
-        int bufferIndexB = 2 * height * width + bufferIndexR;
-
-        output[bufferIndexR] = color.r;
-        output[bufferIndexG] = color.g;
-        output[bufferIndexB] = color.b;
+        return;
     }
+
+    int2 texCoord = dispatchThreadID.xy;
+    float4 color = inputTexture.Load(int3(texCoord, 0));
+
+    int width = captureSize.x;
+    int height = captureSize.y;
+
+    int linearIndex = dispatchThreadID.y * width + dispatchThreadID.x;
+
+    int bufferIndexR = linearIndex / 2;
+    int bufferIndexG = (height * width + linearIndex) / 2;
+    int bufferIndexB = (2 * height * width + linearIndex) / 2;
+
+
+    output[bufferIndexR] = 0;
+    output[bufferIndexG] = 0;
+    output[bufferIndexB] = 0;
+
+    uint packedR, packedG, packedB;
+    if (linearIndex % 2 == 0)
+    {
+        packedR = asuint(f32tof16(color.r)) & 0xFFFF;
+        packedG = asuint(f32tof16(color.g)) & 0xFFFF;
+        packedB = asuint(f32tof16(color.b)) & 0xFFFF;
+    }
+    else
+    {
+        packedR = (asuint(f32tof16(color.r)) & 0xFFFF) << 16;
+        packedG = (asuint(f32tof16(color.g)) & 0xFFFF) << 16;
+        packedB = (asuint(f32tof16(color.b)) & 0xFFFF) << 16;
+    }
+
+    InterlockedOr(output[bufferIndexR], packedR);
+    InterlockedOr(output[bufferIndexG], packedG);
+    InterlockedOr(output[bufferIndexB], packedB);
+}
 ";
         var compiledShader = CompileShader(shaderCode);
 
@@ -377,14 +408,14 @@ public sealed unsafe class ScreenCapturer : IDisposable
     {
         var uavDesc = new D3D11_UNORDERED_ACCESS_VIEW_DESC
         {
-            Format = DXGI_FORMAT.DXGI_FORMAT_R32_FLOAT,
+            Format = DXGI_FORMAT.DXGI_FORMAT_R32_UINT,
             ViewDimension = D3D11_UAV_DIMENSION.D3D11_UAV_DIMENSION_BUFFER,
             Anonymous = new D3D11_UNORDERED_ACCESS_VIEW_DESC._Anonymous_e__Union
             {
                 Buffer = new D3D11_BUFFER_UAV
                 {
                     FirstElement = 0,
-                    NumElements = captureWidth * captureHeight * 3
+                    NumElements = captureWidth * captureHeight * 3 / 2 // We're accessing 2 pixels at a time; required for packing
                 }
             }
         };
@@ -399,7 +430,7 @@ public sealed unsafe class ScreenCapturer : IDisposable
     {
         var bufferDesc = new D3D11_BUFFER_DESC
         {
-            ByteWidth = captureWidth * captureHeight * 3 * sizeof(float),
+            ByteWidth = (uint)(captureWidth * captureHeight * 3 * sizeof(Float16)),
             Usage = D3D11_USAGE.D3D11_USAGE_STAGING,
             BindFlags = 0,
             CPUAccessFlags = D3D11_CPU_ACCESS_FLAG.D3D11_CPU_ACCESS_READ | D3D11_CPU_ACCESS_FLAG.D3D11_CPU_ACCESS_WRITE
@@ -412,11 +443,12 @@ public sealed unsafe class ScreenCapturer : IDisposable
     }
 
 
-    private static ID3DBlob* CompileShader(string shaderCode)
+    private ID3DBlob* CompileShader(string shaderCode)
     {
         ID3DBlob* pCompiledShader;
+        ID3DBlob* pErrorBlob;
         var cStrShaderCode = Marshal.StringToHGlobalAnsi(shaderCode);
-        PInvoke.D3DCompile(
+        var hr = PInvoke.D3DCompile(
             (void*)cStrShaderCode,
             (uint)shaderCode.Length,
             "RgbTensorConvertor",
@@ -424,11 +456,28 @@ public sealed unsafe class ScreenCapturer : IDisposable
             null,
             "CSMain",
             "cs_5_0",
-            3,
+            D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_ALL_RESOURCES_BOUND,
             0,
             &pCompiledShader,
-            null
+            &pErrorBlob
         );
+
+        string error;
+        if (pErrorBlob != null)
+        {
+            error = Marshal.PtrToStringAnsi((nint)pErrorBlob->GetBufferPointer())!; // could also be warnings
+        }
+        else
+        {
+            error = "All good";
+        }
+
+        _logger.LogInformation("Shader compilation warnings/error: {}", error);
+
+        if (!hr.Succeeded)
+        {
+            throw new COMException($"Failed to compile shader: {error}", hr);
+        }
 
         return pCompiledShader;
     }
@@ -444,9 +493,7 @@ public sealed unsafe class ScreenCapturer : IDisposable
         DXGI_OUTDUPL_FRAME_INFO frameInfoLocal;
         IDXGIResource* pDesktopResource;
         var lpVtbl = *(void***)duplication;
-        var hr =
-            ((delegate* unmanaged[Stdcall]<IDXGIOutputDuplication*, uint, DXGI_OUTDUPL_FRAME_INFO*, IDXGIResource**,
-                HRESULT>)lpVtbl[8])(duplication, timeout, &frameInfoLocal, &pDesktopResource);
+        var hr = ((delegate* unmanaged[Stdcall]<IDXGIOutputDuplication*, uint, DXGI_OUTDUPL_FRAME_INFO*, IDXGIResource**, HRESULT>)lpVtbl[8])(duplication, timeout, &frameInfoLocal, &pDesktopResource);
         frameInfo = frameInfoLocal;
         desktopResource = pDesktopResource;
         return hr;
@@ -458,4 +505,7 @@ public sealed unsafe class ScreenCapturer : IDisposable
         pUnknown->QueryInterface(typeof(T).GUID, out var pInterface).ThrowOnFailure();
         return (T*)pInterface;
     }
+
+
+
 }

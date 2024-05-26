@@ -3,10 +3,10 @@ using System.Runtime.InteropServices;
 namespace AimAssist;
 
 [StructLayout(LayoutKind.Sequential)]
-internal struct Int2(int x, int y)
+internal struct UInt2(uint x, uint y)
 {
-    public int X = x;
-    public int Y = y;
+    public uint X = x;
+    public uint Y = y;
 }
 
 

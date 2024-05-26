@@ -17,6 +17,10 @@ public unsafe static partial class LibNVCuda
     [LibraryImport("cudart64_12.dll", EntryPoint = "cudaGraphicsResourceGetMappedPointer")]
     public static partial int CudaGraphicsResourceGetMappedPointer(void** pDevPtr, nuint* pSize, void* resource);
 
+    // cudaGraphicsResourceSetMapFlags
+    [LibraryImport("cudart64_12.dll", EntryPoint = "cudaGraphicsResourceSetMapFlags")]
+    public static partial int CudaGraphicsResourceSetMapFlags(void* resource, uint flags);
+
 
     [Flags]
     public enum CUDA_RESOURCE_REGISTER_FLAG : uint

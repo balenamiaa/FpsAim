@@ -40,6 +40,7 @@ public class AimAssistModule : IDisposable
         _screenHeight = _screenCapturer.ScreenHeight;
         _classIdTargets = config.Targets.Select(target => target.ToClassId()).ToArray();
         tensorElementType = _config.Engine.InputMetadata.First().Value.ElementDataType;
+        Console.WriteLine($"Tensor element type: {tensorElementType}");
         var outputShape = _config.Engine.OutputMetadata.First().Value.Dimensions!;
         _numClasses = outputShape[1] - 4;
         _numDetections = outputShape[2];
@@ -205,10 +206,11 @@ public class AimAssistModule : IDisposable
                     continue;
                 }
 
-                using var mappedTensor = ((ScreenCaptureOutputAvailable)capturedFrame).GetGpuMappedTensor(tensorElementType);
+                var mappedTensor = ((ScreenCaptureOutputAvailable)capturedFrame).GetGpuMappedTensor(tensorElementType);
                 var tensor = mappedTensor.Tensor;
                 _onnxIoBinding.BindInput("images", tensor);
                 _config.Engine.RunWithBinding(_onnxRunOptions, _onnxIoBinding);
+                mappedTensor.Dispose();
                 _onnxIoBinding.ClearBoundInputs();
                 var detections = ParseOutput(_onnxOutput, _config.ConfidenceThreshold);
 
@@ -247,8 +249,9 @@ public class AimAssistModule : IDisposable
                         {
                             var classId = index / numDetections - 4;
                             var detectionIndex = index % numDetections;
-
-                            if (unsafeOutputDataPtrMustNotOutliveNorEscapeReallyDangerous[index] > (Float16)confidenceThreshold)
+                            var confidence = (float)unsafeOutputDataPtrMustNotOutliveNorEscapeReallyDangerous[index];
+                            
+                            if (confidence > confidenceThreshold)
                             {
                                 return ((int, uint)?)(detectionIndex, classId);
                             }
