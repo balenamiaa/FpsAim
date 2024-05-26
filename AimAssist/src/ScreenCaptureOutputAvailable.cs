@@ -24,11 +24,11 @@ public readonly unsafe struct ScreenCaptureOutputAvailable(ID3D11DeviceContext4*
         return preallocatedBuffer;
     }
 
-    public GpuMappedTensor GetGpuMappedTensor()
+    public GpuMappedTensor GetGpuMappedTensor(TensorElementType tensorElementType)
     {
         cudaResource.Map();
         var dataPtr = cudaResource.GetMappedPointer();
-        var ortValue = OrtValue.CreateTensorValueWithData(MemoryInfo, TensorElementType.Float, Shape, dataPtr, preallocatedBuffer.Length * sizeof(float));
+        var ortValue = OrtValue.CreateTensorValueWithData(MemoryInfo, tensorElementType, Shape, dataPtr, preallocatedBuffer.Length * sizeof(float));
         return new GpuMappedTensor(ortValue, cudaResource);
     }
 }

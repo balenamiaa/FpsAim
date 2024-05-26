@@ -61,7 +61,7 @@ public struct AimAssistConfiguration
 
         return new AimAssistConfiguration()
         {
-            Engine = CreateAimAssistSession("v8-nn.onnx", AimAssistAccelerator.TensorRT),
+            Engine = CreateAimAssistSession("v2_f16.onnx", AimAssistAccelerator.TensorRT),
             TargetPredictor = new LinearPredictor(),
             SmoothingFunction = new ProgressiveSmoothing(new StickySmoothing(breakpoints), aimAssistSettings.ProgressFactor),
             ActivationCondition = new ToggleActivationCondition(MouseButton.XButton1),

@@ -18,6 +18,7 @@ public class AimAssistModule : IDisposable
     private readonly CancellationTokenSource _isRunning;
     private readonly Thread _inferenceLoopThread;
     private readonly Thread _communicationLoopThread;
+    private TensorElementType tensorElementType;
     private readonly uint _screenWidth;
     private readonly uint _screenHeight;
     private readonly uint[] _classIdTargets;
@@ -38,11 +39,11 @@ public class AimAssistModule : IDisposable
         _screenWidth = _screenCapturer.ScreenWidth;
         _screenHeight = _screenCapturer.ScreenHeight;
         _classIdTargets = config.Targets.Select(target => target.ToClassId()).ToArray();
+        tensorElementType = _config.Engine.InputMetadata.First().Value.ElementDataType;
         var outputShape = _config.Engine.OutputMetadata.First().Value.Dimensions!;
         _numClasses = outputShape[1] - 4;
         _numDetections = outputShape[2];
-        _onnxOutput = OrtValue.CreateAllocatedTensorValue(OrtAllocator.DefaultInstance, TensorElementType.Float,
-            outputShape.Select(x => (long)x).ToArray());
+        _onnxOutput = OrtValue.CreateAllocatedTensorValue(OrtAllocator.DefaultInstance, tensorElementType, outputShape.Select(x => (long)x).ToArray());
         _onnxIoBinding = config.Engine.CreateIoBinding();
         _onnxIoBinding.BindOutput("output0", _onnxOutput);
         _onnxRunOptions = new RunOptions()
@@ -204,7 +205,7 @@ public class AimAssistModule : IDisposable
                     continue;
                 }
 
-                using var mappedTensor = ((ScreenCaptureOutputAvailable)capturedFrame).GetGpuMappedTensor();
+                using var mappedTensor = ((ScreenCaptureOutputAvailable)capturedFrame).GetGpuMappedTensor(tensorElementType);
                 var tensor = mappedTensor.Tensor;
                 _onnxIoBinding.BindInput("images", tensor);
                 _config.Engine.RunWithBinding(_onnxRunOptions, _onnxIoBinding);
@@ -231,13 +232,13 @@ public class AimAssistModule : IDisposable
 
     private Memory<DetectionResult> ParseOutput(OrtValue onnxOutput, float confidenceThreshold)
     {
-        var outputData = onnxOutput.GetTensorDataAsSpan<float>();
+        var outputData = onnxOutput.GetTensorDataAsSpan<Float16>();
         var numDetections = _numDetections;
 
         (int, uint)[] validIndices;
         unsafe
         {
-            fixed (float* outputDataPtr = outputData)
+            fixed (Float16* outputDataPtr = outputData)
             {
                 var unsafeOutputDataPtrMustNotOutliveNorEscapeReallyDangerous = outputDataPtr;
                 validIndices = Enumerable.Range(4 * numDetections, 2 * numDetections)
@@ -247,7 +248,7 @@ public class AimAssistModule : IDisposable
                             var classId = index / numDetections - 4;
                             var detectionIndex = index % numDetections;
 
-                            if (unsafeOutputDataPtrMustNotOutliveNorEscapeReallyDangerous[index] > confidenceThreshold)
+                            if (unsafeOutputDataPtrMustNotOutliveNorEscapeReallyDangerous[index] > (Float16)confidenceThreshold)
                             {
                                 return ((int, uint)?)(detectionIndex, classId);
                             }
@@ -261,11 +262,11 @@ public class AimAssistModule : IDisposable
         var detectionCount = 0;
         foreach (var (j, classId) in validIndices)
         {
-            var xCenter = outputData[j];
-            var yCenter = outputData[j + numDetections];
-            var width = outputData[j + 2 * numDetections];
-            var height = outputData[j + 3 * numDetections];
-            var confidence = outputData[(int)(j + (4 + classId) * numDetections)];
+            var xCenter = outputData[j].ToFloat();
+            var yCenter = outputData[j + numDetections].ToFloat();
+            var width = outputData[j + 2 * numDetections].ToFloat();
+            var height = outputData[j + 3 * numDetections].ToFloat();
+            var confidence = outputData[(int)(j + (4 + classId) * numDetections)].ToFloat();
 
             _detectionsBuffer[detectionCount++] = new DetectionResult
             {
